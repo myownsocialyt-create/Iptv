@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">Hypnotix</string>
+    <string name="search_channels_hint">Search channels or categories…</string>
+    <string name="favorites_title">Favorite Channels</string>
+    <string name="recent_title">Recently Watched</string>
+    <string name="playlists_title">Playlists</string>
+    <string name="settings_title">Settings</string>
+</resources>

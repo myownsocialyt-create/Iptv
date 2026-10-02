@@ -1,0 +1,7 @@
+{
+  "name": "Hypnotix",
+  "description": "Full-featured Native Android IPTV Player with Media3 ExoPlayer, Hypnotix OTT layout, M3U playlists, and Room favorites.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
