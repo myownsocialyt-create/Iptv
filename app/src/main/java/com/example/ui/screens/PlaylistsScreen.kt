@@ -1,7 +1,10 @@
 package com.example.ui.screens
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -26,218 +29,166 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.local.CustomPlaylistEntity
-import com.example.data.model.CommunityPlaylists
 import com.example.data.repository.PlaylistSource
 import com.example.data.repository.PresetPlaylists
-import com.example.ui.components.PosterAdCard
 import com.example.ui.theme.LocalAppColors
 import com.example.ui.theme.OttPrimary
 
 @Composable
 fun PlaylistsScreen(
-    currentSource: PlaylistSource,
+    currentPlaylist: PlaylistSource,
     customPlaylists: List<CustomPlaylistEntity>,
-    onSelectSource: (PlaylistSource) -> Unit,
-    onNavigateToAddPlaylist: () -> Unit,
-    onDeleteCustomPlaylist: (String) -> Unit,
+    searchQuery: String,
+    onSearchQueryChange: (String) -> Unit,
+    deletedPresetIds: Set<String>,
+    onDeletePresetPlaylist: (String) -> Unit,
+    hasSelectedFirstPlaylist: Boolean,
+    onSelectPlaylist: (PlaylistSource) -> Unit,
+    onDeleteCustomPlaylist: (Long) -> Unit,
+    onNavigateToAddPlaylist: (Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val appColors = LocalAppColors.current
 
     LazyColumn(
-        modifier = modifier.fillMaxSize(),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
+        modifier = modifier.fillMaxSize().background(appColors.background),
+        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
+        // Add Playlist Header Action
         item {
             Row(
-                modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text(
-                    text = "Playlists & Sources",
-                    color = appColors.textPrimary,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold
+                    text = "Playlists",
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = appColors.textPrimary
                 )
+
                 Button(
-                    onClick = onNavigateToAddPlaylist,
+                    onClick = { onNavigateToAddPlaylist(0) },
                     colors = ButtonDefaults.buttonColors(containerColor = OttPrimary),
-                    shape = RoundedCornerShape(8.dp)
+                    shape = RoundedCornerShape(10.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                 ) {
-                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Icon(Icons.Default.Add, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text("Add Playlist", fontSize = 12.sp)
+                    Text("Add Playlist", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White)
                 }
             }
         }
 
-        // Poster Ad Card
-        item {
-            PosterAdCard(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp))
-        }
-
+        // Preset Playlists Section
         item {
             Text(
-                text = "Preset Sources",
-                color = appColors.textSecondary,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(vertical = 6.dp)
+                text = "DEFAULT PLAYLISTS",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.ExtraBold,
+                color = OttPrimary,
+                letterSpacing = 0.5.sp
             )
         }
 
-        items(PresetPlaylists.DEFAULT_PLAYLISTS) { source ->
-            val isSelected = source.id == currentSource.id
+        val presets = listOf(PresetPlaylists.ALL, PresetPlaylists.INDIA, PresetPlaylists.GLOBAL)
+            .filter { it.id !in deletedPresetIds }
+
+        items(presets) { preset ->
+            val isSelected = currentPlaylist.id == preset.id
             Card(
                 shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(containerColor = appColors.surface),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 4.dp)
-                    .clickable { onSelectSource(source) }
+                colors = CardDefaults.cardColors(containerColor = if (isSelected) OttPrimary.copy(alpha = 0.12f) else appColors.surface),
+                border = BorderStroke(1.dp, if (isSelected) OttPrimary else appColors.border),
+                modifier = Modifier.fillMaxWidth().clickable { onSelectPlaylist(preset) }
             ) {
                 Row(
-                    modifier = Modifier.padding(14.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                    modifier = Modifier.fillMaxWidth().padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.PlaylistPlay,
-                        contentDescription = null,
-                        tint = if (isSelected) OttPrimary else appColors.textSecondary,
-                        modifier = Modifier.size(24.dp)
-                    )
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = source.title,
-                            color = if (isSelected) OttPrimary else appColors.textPrimary,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = source.url,
-                            color = appColors.textSecondary,
-                            fontSize = 11.sp,
-                            maxLines = 1
-                        )
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                        Box(
+                            modifier = Modifier.size(40.dp).clip(RoundedCornerShape(8.dp)).background(OttPrimary.copy(alpha = 0.15f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Default.PlaylistPlay, contentDescription = null, tint = OttPrimary, modifier = Modifier.size(24.dp))
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column {
+                            Text(preset.title, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = appColors.textPrimary)
+                            Text("Official Curated Feed", fontSize = 11.sp, color = appColors.textSecondary)
+                        }
                     }
+
                     if (isSelected) {
-                        Icon(Icons.Default.Check, contentDescription = "Active", tint = OttPrimary)
+                        Surface(color = OttPrimary, shape = RoundedCornerShape(12.dp)) {
+                            Text("ACTIVE", color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp))
+                        }
                     }
                 }
             }
         }
 
+        // Custom Playlists Section
         if (customPlaylists.isNotEmpty()) {
             item {
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(10.dp))
                 Text(
-                    text = "Custom Playlists (${customPlaylists.size})",
-                    color = appColors.textSecondary,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(vertical = 6.dp)
+                    text = "CUSTOM PLAYLISTS (${customPlaylists.size})",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = OttPrimary,
+                    letterSpacing = 0.5.sp
                 )
             }
 
-            items(customPlaylists, key = { it.id }) { custom ->
-                val source = PlaylistSource(id = custom.id, title = custom.name, url = custom.url, isPreset = false)
-                val isSelected = custom.id == currentSource.id
+            items(customPlaylists) { cp ->
+                val customSource = PlaylistSource(id = "custom_${cp.id}", title = cp.title, url = cp.url, isPreset = false)
+                val isSelected = currentPlaylist.id == customSource.id
+
                 Card(
                     shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(containerColor = appColors.surface),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 4.dp)
-                        .clickable { onSelectSource(source) }
+                    colors = CardDefaults.cardColors(containerColor = if (isSelected) OttPrimary.copy(alpha = 0.12f) else appColors.surface),
+                    border = BorderStroke(1.dp, if (isSelected) OttPrimary else appColors.border),
+                    modifier = Modifier.fillMaxWidth().clickable { onSelectPlaylist(customSource) }
                 ) {
                     Row(
-                        modifier = Modifier.padding(14.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                        modifier = Modifier.fillMaxWidth().padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.PlaylistPlay,
-                            contentDescription = null,
-                            tint = if (isSelected) OttPrimary else appColors.textSecondary,
-                            modifier = Modifier.size(24.dp)
-                        )
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = custom.name,
-                                color = if (isSelected) OttPrimary else appColors.textPrimary,
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Text(
-                                text = custom.url,
-                                color = appColors.textSecondary,
-                                fontSize = 11.sp,
-                                maxLines = 1
-                            )
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                            Box(
+                                modifier = Modifier.size(40.dp).clip(RoundedCornerShape(8.dp)).background(appColors.surfaceVariant),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text("📁", fontSize = 18.sp)
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f, fill = false)) {
+                                Text(cp.title, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = appColors.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(cp.url, fontSize = 11.sp, color = appColors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
                         }
-                        IconButton(onClick = { onDeleteCustomPlaylist(custom.id) }) {
-                            Icon(Icons.Default.Delete, contentDescription = "Delete", tint = Color.Red.copy(alpha = 0.7f))
+
+                        IconButton(onClick = { onDeleteCustomPlaylist(cp.id) }, modifier = Modifier.size(32.dp)) {
+                            Icon(Icons.Default.Delete, contentDescription = "Delete", tint = Color.Red.copy(alpha = 0.7f), modifier = Modifier.size(18.dp))
                         }
-                    }
-                }
-            }
-        }
-
-        // Community Recommended Playlists
-        item {
-            Spacer(modifier = Modifier.height(16.dp))
-            Text(
-                text = "Community Recommended Playlists",
-                color = appColors.textSecondary,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(vertical = 6.dp)
-            )
-        }
-
-        items(CommunityPlaylists.presets) { community ->
-            val source = PlaylistSource(id = community.id, title = community.name, url = community.url, isPreset = false)
-            val isSelected = community.id == currentSource.id
-            Card(
-                shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(containerColor = appColors.surface),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 4.dp)
-                    .clickable { onSelectSource(source) }
-            ) {
-                Row(
-                    modifier = Modifier.padding(14.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(text = community.flagEmoji, fontSize = 22.sp)
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = community.name,
-                            color = if (isSelected) OttPrimary else appColors.textPrimary,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = community.description,
-                            color = appColors.textSecondary,
-                            fontSize = 11.sp
-                        )
-                    }
-                    if (isSelected) {
-                        Icon(Icons.Default.Check, contentDescription = "Active", tint = OttPrimary)
                     }
                 }
             }

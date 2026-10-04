@@ -48,7 +48,6 @@ import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.HighQuality
-import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.PlayArrow
@@ -67,8 +66,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -140,12 +137,6 @@ fun IptvVideoPlayer(
     val isPlaying by playerManager.isPlaying.collectAsState()
     val availableQualities by playerManager.availableQualities.collectAsState()
     val selectedQualityLabel by playerManager.selectedQualityLabel.collectAsState()
-    val currentPosition by playerManager.currentPosition.collectAsState()
-    val duration by playerManager.duration.collectAsState()
-    val bufferedPosition by playerManager.bufferedPosition.collectAsState()
-    val isSeekable by playerManager.isSeekable.collectAsState()
-
-    val isMovie = channel.isMovieOrVod
 
     var aspectRatioMode by remember { mutableStateOf(AspectRatioMode.FIT_16_9) }
 
@@ -154,45 +145,12 @@ fun IptvVideoPlayer(
     var showChannelOverlay by remember { mutableStateOf(false) }
     var showQualityMenu by remember { mutableStateOf(false) }
 
-    // YouTube-style In-Stream Ad State
-    val inStreamAdState by com.example.ad.InStreamAdManager.adState.collectAsState()
-
-    // Random Preroll Ad check on channel change
-    LaunchedEffect(channel.streamUrl) {
-        com.example.ad.InStreamAdManager.onChannelStarted(channel.streamUrl, context)
-    }
-
-    // Sync random ad loop with playback state
-    LaunchedEffect(isPlaying) {
-        com.example.ad.InStreamAdManager.updatePlaybackStatus(isPlaying, context)
-    }
-
-    // Mute video stream audio and hide controls while in-stream ad is playing
-    LaunchedEffect(inStreamAdState.isAdActive) {
-        if (inStreamAdState.isAdActive) {
-            playerManager.exoPlayer?.volume = 0f
-            showControls = false
-        } else {
-            playerManager.exoPlayer?.volume = 1f
-        }
-    }
-
     // Gesture indicator overlays
     var gestureIndicatorText by remember { mutableStateOf<String?>(null) }
     var gestureIndicatorIcon by remember { mutableStateOf<androidx.compose.ui.graphics.vector.ImageVector?>(null) }
     var gestureIndicatorPercent by remember { mutableFloatStateOf(0f) }
     var showGestureIndicator by remember { mutableStateOf(false) }
     var accumulatedVolumeFraction by remember { mutableFloatStateOf(-1f) }
-    var cachedMaxVol by remember { mutableIntStateOf(15) }
-    var cachedCurrentVolInt by remember { mutableIntStateOf(-1) }
-
-    LaunchedEffect(gestureIndicatorText) {
-        if (gestureIndicatorText != null) {
-            delay(1200)
-            showGestureIndicator = false
-            gestureIndicatorText = null
-        }
-    }
 
     // Trigger channel playback via the shared player manager
     DisposableEffect(channel.streamUrl) {
@@ -262,13 +220,11 @@ fun IptvVideoPlayer(
                 playerView.resizeMode = when (aspectRatioMode) {
                     AspectRatioMode.FIT_16_9 -> AspectRatioFrameLayout.RESIZE_MODE_FIT
                     AspectRatioMode.FOUR_THREE -> AspectRatioFrameLayout.RESIZE_MODE_FILL
-                    AspectRatioMode.FILL_CROP, AspectRatioMode.ZOOM, AspectRatioMode.FILL -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                    AspectRatioMode.FILL_CROP, AspectRatioMode.FILL, AspectRatioMode.ZOOM -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
                     else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
                 }
             },
-            onReset = { playerView ->
-                playerView.player = null
-            },
+            onReset = {},
             onRelease = { playerView ->
                 playerView.player = null
             },
@@ -292,31 +248,12 @@ fun IptvVideoPlayer(
                                 showControls = !showControls
                                 showChannelOverlay = false
                             },
-                            onDoubleTap = { offset ->
-                                if (isMovie) {
-                                    val width = size.width
-                                    if (offset.x < width * 0.4f) {
-                                        playerManager.seekBackward(10_000L)
-                                        gestureIndicatorText = "-10s"
-                                        showGestureIndicator = true
-                                    } else if (offset.x > width * 0.6f) {
-                                        playerManager.seekForward(10_000L)
-                                        gestureIndicatorText = "+10s"
-                                        showGestureIndicator = true
-                                    } else {
-                                        aspectRatioMode = when (aspectRatioMode) {
-                                            AspectRatioMode.FIT_16_9 -> AspectRatioMode.FILL_CROP
-                                            AspectRatioMode.FILL_CROP -> AspectRatioMode.FOUR_THREE
-                                            else -> AspectRatioMode.FIT_16_9
-                                        }
-                                    }
-                                } else {
-                                    // Cycle aspect ratio
-                                    aspectRatioMode = when (aspectRatioMode) {
-                                        AspectRatioMode.FIT_16_9 -> AspectRatioMode.FILL_CROP
-                                        AspectRatioMode.FILL_CROP -> AspectRatioMode.FOUR_THREE
-                                        else -> AspectRatioMode.FIT_16_9
-                                    }
+                            onDoubleTap = {
+                                // Cycle aspect ratio
+                                aspectRatioMode = when (aspectRatioMode) {
+                                    AspectRatioMode.FIT_16_9 -> AspectRatioMode.FILL_CROP
+                                    AspectRatioMode.FILL_CROP -> AspectRatioMode.FOUR_THREE
+                                    else -> AspectRatioMode.FIT_16_9
                                 }
                             }
                         )
@@ -325,16 +262,6 @@ fun IptvVideoPlayer(
                 .pointerInput(isPipMode) {
                     if (!isPipMode) {
                         detectVerticalDragGestures(
-                            onDragStart = { offset ->
-                                val width = size.width
-                                if (offset.x >= width / 2) {
-                                    val maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
-                                    val currentVol = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-                                    cachedMaxVol = maxVol
-                                    cachedCurrentVolInt = currentVol
-                                    accumulatedVolumeFraction = (currentVol.toFloat() / maxVol.toFloat()).coerceIn(0f, 1f)
-                                }
-                            },
                             onDragEnd = {
                                 showGestureIndicator = false
                                 accumulatedVolumeFraction = -1f
@@ -363,28 +290,23 @@ fun IptvVideoPlayer(
                                         showGestureIndicator = true
                                     }
                                 } else {
-                                    // Right side: Volume (Smooth continuous drag matching brightness)
+                                    // Right side: Volume (Smooth continuous fraction matching brightness)
+                                    val maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
                                     if (accumulatedVolumeFraction < 0f) {
-                                        val maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
                                         val currentVol = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-                                        cachedMaxVol = maxVol
-                                        cachedCurrentVolInt = currentVol
                                         accumulatedVolumeFraction = (currentVol.toFloat() / maxVol.toFloat()).coerceIn(0f, 1f)
                                     }
 
-                                    // Smoothly adjust by exact drag amount matching brightness sensitivity
+                                    // Smoothly adjust by exact drag amount matching brightness sensitivity (dragAmount / 500f)
                                     accumulatedVolumeFraction = (accumulatedVolumeFraction - (dragAmount / 500f)).coerceIn(0f, 1f)
 
-                                    val targetVolInt = (accumulatedVolumeFraction * cachedMaxVol).roundToInt()
-                                    if (targetVolInt != cachedCurrentVolInt) {
-                                        cachedCurrentVolInt = targetVolInt
+                                    val targetVolInt = (accumulatedVolumeFraction * maxVol).roundToInt()
+                                    val currentStreamVol = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+                                    if (targetVolInt != currentStreamVol) {
                                         try {
                                             audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, targetVolInt, 0)
                                         } catch (_: Exception) {}
                                     }
-
-                                    // Smooth real-time software audio volume for continuous sound level without stepping
-                                    playerManager.exoPlayer?.volume = accumulatedVolumeFraction
 
                                     gestureIndicatorText = "Volume ${(accumulatedVolumeFraction * 100).roundToInt()}%"
                                     gestureIndicatorIcon = Icons.Default.VolumeUp
@@ -541,7 +463,7 @@ fun IptvVideoPlayer(
 
         // Custom Overlay Controls
         AnimatedVisibility(
-            visible = showControls && !isPipMode && !inStreamAdState.isAdActive,
+            visible = showControls && !isPipMode,
             enter = fadeIn(),
             exit = fadeOut(),
             modifier = Modifier.fillMaxSize()
@@ -591,58 +513,29 @@ fun IptvVideoPlayer(
                         Spacer(modifier = Modifier.width(8.dp))
                     }
 
-                    // Badge: MOVIE with Hours & Minutes for Movies, LIVE for Live TV
-                    if (isMovie) {
-                        Surface(
-                            color = OttGold,
-                            shape = RoundedCornerShape(5.dp),
-                            shadowElevation = 3.dp
+                    // LIVE Badge placed where channel name was (channel name & category removed as requested)
+                    Surface(
+                        color = OttLiveRed,
+                        shape = RoundedCornerShape(5.dp),
+                        shadowElevation = 3.dp
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.5.dp)
                         ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.5.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Movie,
-                                    contentDescription = null,
-                                    tint = Color.Black,
-                                    modifier = Modifier.size(11.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                val runtimeStr = if (duration > 0) " • ${formatHoursMinutes(duration)}" else ""
-                                Text(
-                                    text = "MOVIE$runtimeStr",
-                                    color = Color.Black,
-                                    fontSize = 9.5.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    letterSpacing = 0.5.sp
-                                )
-                            }
-                        }
-                    } else {
-                        Surface(
-                            color = OttLiveRed,
-                            shape = RoundedCornerShape(5.dp),
-                            shadowElevation = 3.dp
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.5.dp)
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(5.dp)
-                                        .background(Color.White, CircleShape)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = "LIVE",
-                                    color = Color.White,
-                                    fontSize = 9.sp,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    letterSpacing = 0.5.sp
-                                )
-                            }
+                            Box(
+                                modifier = Modifier
+                                    .size(5.dp)
+                                    .background(Color.White, CircleShape)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "LIVE",
+                                color = Color.White,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                letterSpacing = 0.5.sp
+                            )
                         }
                     }
 
@@ -769,7 +662,7 @@ fun IptvVideoPlayer(
                     }
                 }
 
-                // Center Play/Pause & Channel Next/Previous Controls (or -10s / +10s for Movies)
+                // Center Play/Pause & Channel Next/Previous Controls (slightly smaller as requested)
                 Row(
                     modifier = Modifier
                         .align(Alignment.Center)
@@ -777,333 +670,130 @@ fun IptvVideoPlayer(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(18.dp)
                 ) {
-                    if (isMovie) {
-                        // Rewind 10s button
-                        Surface(
-                            onClick = { playerManager.seekBackward(10_000L) },
-                            shape = CircleShape,
-                            color = Color.Black.copy(alpha = 0.65f),
-                            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.25f)),
-                            modifier = Modifier
-                                .size(46.dp)
-                                .testTag("player_center_rewind_10s")
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Text(
-                                    text = "-10s",
-                                    color = Color.White,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.ExtraBold
-                                )
+                    // Previous Channel
+                    Surface(
+                        onClick = {
+                            if (hasPrev) {
+                                onChannelSelect(allChannels[currentIndex - 1])
                             }
+                        },
+                        enabled = hasPrev,
+                        shape = CircleShape,
+                        color = Color.Black.copy(alpha = if (hasPrev) 0.55f else 0.25f),
+                        border = BorderStroke(1.dp, Color.White.copy(alpha = if (hasPrev) 0.25f else 0.1f)),
+                        modifier = Modifier
+                            .size(42.dp)
+                            .testTag("player_prev_channel")
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Default.SkipPrevious,
+                                contentDescription = "Previous Channel",
+                                tint = if (hasPrev) Color.White else Color.Gray,
+                                modifier = Modifier.size(22.dp)
+                            )
                         }
+                    }
 
-                        // Play/Pause Main Button
-                        Surface(
-                            onClick = {
-                                playerManager.togglePlayPause()
-                            },
-                            shape = CircleShape,
-                            color = OttPrimary,
-                            border = BorderStroke(2.dp, Color.White.copy(alpha = 0.35f)),
-                            shadowElevation = 6.dp,
-                            modifier = Modifier
-                                .size(56.dp)
-                                .testTag("player_play_pause")
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                    contentDescription = if (isPlaying) "Pause" else "Play",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(34.dp)
-                                )
-                            }
+                    // Play/Pause Main Button
+                    Surface(
+                        onClick = {
+                            playerManager.togglePlayPause()
+                        },
+                        shape = CircleShape,
+                        color = OttPrimary,
+                        border = BorderStroke(2.dp, Color.White.copy(alpha = 0.35f)),
+                        shadowElevation = 6.dp,
+                        modifier = Modifier
+                            .size(54.dp)
+                            .testTag("player_play_pause")
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                contentDescription = if (isPlaying) "Pause" else "Play",
+                                tint = Color.White,
+                                modifier = Modifier.size(32.dp)
+                            )
                         }
+                    }
 
-                        // Forward 10s button
-                        Surface(
-                            onClick = { playerManager.seekForward(10_000L) },
-                            shape = CircleShape,
-                            color = Color.Black.copy(alpha = 0.65f),
-                            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.25f)),
-                            modifier = Modifier
-                                .size(46.dp)
-                                .testTag("player_center_forward_10s")
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Text(
-                                    text = "+10s",
-                                    color = Color.White,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.ExtraBold
-                                )
+                    // Next Channel
+                    Surface(
+                        onClick = {
+                            if (hasNext) {
+                                onChannelSelect(allChannels[currentIndex + 1])
                             }
-                        }
-                    } else {
-                        // Previous Channel
-                        Surface(
-                            onClick = {
-                                if (hasPrev) {
-                                    onChannelSelect(allChannels[currentIndex - 1])
-                                }
-                            },
-                            enabled = hasPrev,
-                            shape = CircleShape,
-                            color = Color.Black.copy(alpha = if (hasPrev) 0.55f else 0.25f),
-                            border = BorderStroke(1.dp, Color.White.copy(alpha = if (hasPrev) 0.25f else 0.1f)),
-                            modifier = Modifier
-                                .size(42.dp)
-                                .testTag("player_prev_channel")
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = Icons.Default.SkipPrevious,
-                                    contentDescription = "Previous Channel",
-                                    tint = if (hasPrev) Color.White else Color.Gray,
-                                    modifier = Modifier.size(22.dp)
-                                )
-                            }
-                        }
-
-                        // Play/Pause Main Button
-                        Surface(
-                            onClick = {
-                                playerManager.togglePlayPause()
-                            },
-                            shape = CircleShape,
-                            color = OttPrimary,
-                            border = BorderStroke(2.dp, Color.White.copy(alpha = 0.35f)),
-                            shadowElevation = 6.dp,
-                            modifier = Modifier
-                                .size(54.dp)
-                                .testTag("player_play_pause")
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                    contentDescription = if (isPlaying) "Pause" else "Play",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(32.dp)
-                                )
-                            }
-                        }
-
-                        // Next Channel
-                        Surface(
-                            onClick = {
-                                if (hasNext) {
-                                    onChannelSelect(allChannels[currentIndex + 1])
-                                }
-                            },
-                            enabled = hasNext,
-                            shape = CircleShape,
-                            color = Color.Black.copy(alpha = if (hasNext) 0.55f else 0.25f),
-                            border = BorderStroke(1.dp, Color.White.copy(alpha = if (hasNext) 0.25f else 0.1f)),
-                            modifier = Modifier
-                                .size(42.dp)
-                                .testTag("player_next_channel")
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = Icons.Default.SkipNext,
-                                    contentDescription = "Next Channel",
-                                    tint = if (hasNext) Color.White else Color.Gray,
-                                    modifier = Modifier.size(22.dp)
-                                )
-                            }
+                        },
+                        enabled = hasNext,
+                        shape = CircleShape,
+                        color = Color.Black.copy(alpha = if (hasNext) 0.55f else 0.25f),
+                        border = BorderStroke(1.dp, Color.White.copy(alpha = if (hasNext) 0.25f else 0.1f)),
+                        modifier = Modifier
+                            .size(42.dp)
+                            .testTag("player_next_channel")
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Default.SkipNext,
+                                contentDescription = "Next Channel",
+                                tint = if (hasNext) Color.White else Color.Gray,
+                                modifier = Modifier.size(22.dp)
+                            )
                         }
                     }
                 }
 
-                // Bottom Control Bar (YouTube Scrubber & Hours/Minutes for Movies, Live Bar for Live TV)
-                if (isMovie) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .align(Alignment.BottomCenter)
-                            .padding(horizontal = 14.dp, vertical = 6.dp)
+                // Bottom Control Bar
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .align(Alignment.BottomCenter)
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Surface(
+                        color = Color.Black.copy(alpha = 0.5f),
+                        shape = RoundedCornerShape(8.dp),
+                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.15f))
                     ) {
-                        var isDraggingSlider by remember { mutableStateOf(false) }
-                        var dragProgressMs by remember { mutableFloatStateOf(0f) }
-
-                        val currentDisplayPos = if (isDraggingSlider) dragProgressMs.toLong() else currentPosition
-                        val safeDuration = maxOf(1L, duration)
-                        val sliderValue = (currentDisplayPos.toFloat()).coerceIn(0f, safeDuration.toFloat())
-
-                        // 1. YouTube Scrubber Slider
-                        Slider(
-                            value = sliderValue,
-                            onValueChange = { newVal ->
-                                isDraggingSlider = true
-                                dragProgressMs = newVal
-                            },
-                            onValueChangeFinished = {
-                                isDraggingSlider = false
-                                playerManager.seekTo(dragProgressMs.toLong())
-                            },
-                            valueRange = 0f..safeDuration.toFloat(),
-                            colors = SliderDefaults.colors(
-                                thumbColor = OttPrimary,
-                                activeTrackColor = OttPrimary,
-                                inactiveTrackColor = Color.White.copy(alpha = 0.25f)
-                            ),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(26.dp)
-                                .testTag("player_movie_slider")
-                        )
-
-                        // 2. Info Row: Timestamp (hours & mins like YouTube) + Seek buttons + Fullscreen
                         Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(bottom = 2.dp),
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
+                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
                         ) {
-                            // YouTube Style Time Display (shows hours & minutes)
-                            Surface(
-                                color = Color.Black.copy(alpha = 0.6f),
-                                shape = RoundedCornerShape(6.dp),
-                                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.2f))
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                                ) {
-                                    Text(
-                                        text = "${formatYouTubeTime(currentDisplayPos)} / ${formatYouTubeTime(duration)}",
-                                        color = Color.White,
-                                        fontSize = 11.5.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    if (duration > 0) {
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Text(
-                                            text = "(${formatHoursMinutes(duration)})",
-                                            color = OttGold,
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.SemiBold
-                                        )
-                                    }
-                                }
-                            }
-
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Surface(
-                                    onClick = { playerManager.seekBackward(10_000L) },
-                                    shape = CircleShape,
-                                    color = Color.Black.copy(alpha = 0.55f),
-                                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.25f)),
-                                    modifier = Modifier
-                                        .testTag("player_bottom_rewind_10s")
-                                        .size(34.dp)
-                                ) {
-                                    Box(contentAlignment = Alignment.Center) {
-                                        Text(
-                                            text = "-10s",
-                                            color = Color.White,
-                                            fontSize = 10.sp,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-                                }
-
-                                Surface(
-                                    onClick = { playerManager.seekForward(10_000L) },
-                                    shape = CircleShape,
-                                    color = Color.Black.copy(alpha = 0.55f),
-                                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.25f)),
-                                    modifier = Modifier
-                                        .testTag("player_bottom_forward_10s")
-                                        .size(34.dp)
-                                ) {
-                                    Box(contentAlignment = Alignment.Center) {
-                                        Text(
-                                            text = "+10s",
-                                            color = Color.White,
-                                            fontSize = 10.sp,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-                                }
-
-                                Surface(
-                                    onClick = onToggleFullscreen,
-                                    shape = CircleShape,
-                                    color = Color.Black.copy(alpha = 0.55f),
-                                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.25f)),
-                                    modifier = Modifier
-                                        .testTag("player_bottom_fullscreen_button")
-                                        .size(38.dp)
-                                ) {
-                                    Box(contentAlignment = Alignment.Center) {
-                                        Icon(
-                                            imageVector = if (isFullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
-                                            contentDescription = if (isFullscreen) "Exit Fullscreen" else "Enter Fullscreen",
-                                            tint = Color.White,
-                                            modifier = Modifier.size(20.dp)
-                                        )
-                                    }
-                                }
-                            }
+                            Box(
+                                modifier = Modifier
+                                    .size(5.dp)
+                                    .background(OttGreen, CircleShape)
+                            )
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text(
+                                text = "HLS Live Stream",
+                                color = Color.White.copy(alpha = 0.9f),
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Medium
+                            )
                         }
                     }
-                } else {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .align(Alignment.BottomCenter)
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Surface(
-                            color = Color.Black.copy(alpha = 0.5f),
-                            shape = RoundedCornerShape(8.dp),
-                            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.15f))
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(5.dp)
-                                        .background(OttGreen, CircleShape)
-                                )
-                                Spacer(modifier = Modifier.width(5.dp))
-                                Text(
-                                    text = "HLS Live Stream",
-                                    color = Color.White.copy(alpha = 0.9f),
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Medium
-                                )
-                            }
-                        }
 
-                        // YouTube-style Fullscreen Button in Bottom-Right of Video
-                        Surface(
-                            onClick = onToggleFullscreen,
-                            shape = CircleShape,
-                            color = Color.Black.copy(alpha = 0.55f),
-                            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.25f)),
-                            modifier = Modifier
-                                .testTag("player_bottom_fullscreen_button")
-                                .size(40.dp)
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = if (isFullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
-                                    contentDescription = if (isFullscreen) "Exit Fullscreen" else "Enter Fullscreen",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(22.dp)
-                                )
-                            }
+                    // YouTube-style Fullscreen Button in Bottom-Right of Video
+                    Surface(
+                        onClick = onToggleFullscreen,
+                        shape = CircleShape,
+                        color = Color.Black.copy(alpha = 0.55f),
+                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.25f)),
+                        modifier = Modifier
+                            .testTag("player_bottom_fullscreen_button")
+                            .size(40.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = if (isFullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
+                                contentDescription = if (isFullscreen) "Exit Fullscreen" else "Enter Fullscreen",
+                                tint = Color.White,
+                                modifier = Modifier.size(22.dp)
+                            )
                         }
                     }
                 }
@@ -1231,39 +921,11 @@ fun IptvVideoPlayer(
             }
         }
 
-        // YouTube-style In-Stream Video Ad Overlay (Photos 2 & 3: Landscape & Portrait)
-        if (inStreamAdState.isAdActive && !isPipMode) {
-            com.example.ad.YouTubeVideoAdOverlay(
-                adState = inStreamAdState,
-                onSkipAd = { com.example.ad.InStreamAdManager.dismissAd() },
-                modifier = Modifier.fillMaxSize()
-            )
-        }
+        // YouTube-style In-Stream Video Ad Overlay (Portrait & Landscape)
+        com.example.ad.InStreamVideoAdOverlay(
+            channel = channel,
+            exoPlayer = playerManager.exoPlayer,
+            modifier = Modifier.fillMaxSize()
+        )
     }
 }
-
-private fun formatYouTubeTime(millis: Long): String {
-    if (millis <= 0L) return "0:00"
-    val totalSeconds = millis / 1000
-    val seconds = totalSeconds % 60
-    val minutes = (totalSeconds / 60) % 60
-    val hours = totalSeconds / 3600
-    return if (hours > 0) {
-        String.format("%d:%02d:%02d", hours, minutes, seconds)
-    } else {
-        String.format("%d:%02d", minutes, seconds)
-    }
-}
-
-private fun formatHoursMinutes(millis: Long): String {
-    if (millis <= 0L) return ""
-    val totalMinutes = millis / (1000 * 60)
-    val hours = totalMinutes / 60
-    val minutes = totalMinutes % 60
-    return when {
-        hours > 0 && minutes > 0 -> "${hours} hr ${minutes} min"
-        hours > 0 -> "${hours} hr"
-        else -> "${minutes} min"
-    }
-}
-

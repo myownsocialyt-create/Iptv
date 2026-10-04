@@ -1,219 +1,148 @@
 package com.example.data.repository
 
-import android.util.Log
 import com.example.data.local.ChannelDao
 import com.example.data.local.XtreamAccountEntity
 import com.example.data.model.Channel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.BufferedReader
-import java.io.InputStreamReader
-import java.net.HttpURLConnection
-import java.net.URL
-import javax.net.ssl.HttpsURLConnection
-import javax.net.ssl.SSLContext
-import javax.net.ssl.TrustManager
-import javax.net.ssl.X509TrustManager
-import java.security.cert.X509Certificate
+import java.util.concurrent.TimeUnit
 
-class XtreamRepository(private val channelDao: ChannelDao) {
+class XtreamRepository(
+    private val channelDao: ChannelDao,
+    private val okHttpClient: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
+        .build()
+) {
+    fun observeAccounts(): Flow<List<XtreamAccountEntity>> = channelDao.getAllXtreamAccounts()
 
-    init {
-        // Ensure lenient SSL globally
+    fun observeActiveAccount(): Flow<XtreamAccountEntity?> = channelDao.getActiveXtreamAccount()
+
+    suspend fun addAccount(
+        name: String,
+        serverUrl: String,
+        username: String,
+        password: String
+    ): Result<Long> = withContext(Dispatchers.IO) {
+        val cleanServer = serverUrl.trim().removeSuffix("/")
+        val testUrl = "$cleanServer/player_api.php?username=${username.trim()}&password=${password.trim()}"
+
         try {
-            val trustAll = arrayOf<TrustManager>(object : X509TrustManager {
-                override fun checkClientTrusted(chain: Array<X509Certificate>?, authType: String?) {}
-                override fun checkServerTrusted(chain: Array<X509Certificate>?, authType: String?) {}
-                override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
-            })
-            val sslContext = SSLContext.getInstance("TLS")
-            sslContext.init(null, trustAll, java.security.SecureRandom())
-            HttpsURLConnection.setDefaultSSLSocketFactory(sslContext.socketFactory)
-            HttpsURLConnection.setDefaultHostnameVerifier { _, _ -> true }
-        } catch (_: Exception) {}
-    }
+            val request = Request.Builder().url(testUrl).build()
+            val response = okHttpClient.newCall(request).execute()
+            if (!response.isSuccessful) {
+                return@withContext Result.failure(Exception("HTTP error ${response.code} connecting to Xtream server"))
+            }
 
-    fun getAllAccounts(): Flow<List<XtreamAccountEntity>> = channelDao.getAllXtreamAccounts()
+            val body = response.body?.string() ?: ""
+            val json = JSONObject(body)
+            val userInfo = json.optJSONObject("user_info")
+            val auth = userInfo?.optInt("auth", 0) ?: 0
 
-    suspend fun saveAccount(account: XtreamAccountEntity) = withContext(Dispatchers.IO) {
-        channelDao.insertXtreamAccount(account)
-    }
+            if (auth != 1) {
+                val status = userInfo?.optString("status", "Invalid credentials") ?: "Invalid credentials"
+                return@withContext Result.failure(Exception("Xtream login failed: $status"))
+            }
 
-    suspend fun loginAndSaveAccount(serverUrl: String, user: String, pass: String, name: String) = withContext(Dispatchers.IO) {
-        val success = authenticate(serverUrl, user, pass)
-        if (!success) {
-            throw Exception("Authentication failed. Please check credentials or server URL.")
+            val id = channelDao.insertXtreamAccount(
+                XtreamAccountEntity(
+                    name = name.trim().ifEmpty { "Xtream Account" },
+                    serverUrl = cleanServer,
+                    username = username.trim(),
+                    password = password.trim(),
+                    isActive = true
+                )
+            )
+            channelDao.setActiveXtreamAccount(id)
+            Result.success(id)
+        } catch (e: Exception) {
+            Result.failure(e)
         }
-        val account = XtreamAccountEntity(
-            id = "xtream_${System.currentTimeMillis()}",
-            name = if (name.isNotBlank()) name else user,
-            serverUrl = normalizeServerUrl(serverUrl),
-            username = user,
-            password = pass
-        )
-        channelDao.insertXtreamAccount(account)
     }
 
-    suspend fun deleteAccount(id: String) = withContext(Dispatchers.IO) {
+    suspend fun setActiveAccount(id: Long) = withContext(Dispatchers.IO) {
+        channelDao.setActiveXtreamAccount(id)
+    }
+
+    suspend fun deleteAccount(id: Long) = withContext(Dispatchers.IO) {
         channelDao.deleteXtreamAccount(id)
     }
 
-    suspend fun authenticate(serverUrl: String, user: String, pass: String): Boolean = withContext(Dispatchers.IO) {
-        val server = normalizeServerUrl(serverUrl)
-        val testUrl = "$server/player_api.php?username=$user&password=$pass"
+    suspend fun fetchLiveStreams(account: XtreamAccountEntity): List<Channel> = withContext(Dispatchers.IO) {
+        val url = "${account.serverUrl}/player_api.php?username=${account.username}&password=${account.password}&action=get_live_streams"
         try {
-            val response = executeGet(testUrl)
-            if (response.isBlank()) return@withContext false
-            val json = JSONObject(response)
-            val userInfo = json.optJSONObject("user_info")
-            val status = userInfo?.optString("status") ?: ""
-            val auth = userInfo?.optInt("auth", 0) ?: 0
-            return@withContext status.equals("Active", ignoreCase = true) || auth == 1
-        } catch (e: Exception) {
-            Log.w("XtreamRepository", "Auth failed for $serverUrl: ${e.message}")
-            return@withContext false
-        }
-    }
+            val request = Request.Builder().url(url).build()
+            val response = okHttpClient.newCall(request).execute()
+            if (!response.isSuccessful) return@withContext emptyList()
 
-    suspend fun loadXtreamChannels(account: XtreamAccountEntity): List<Channel> = withContext(Dispatchers.IO) {
-        val server = normalizeServerUrl(account.serverUrl)
-        val user = account.username
-        val pass = account.password
+            val body = response.body?.string() ?: return@withContext emptyList()
+            val array = JSONArray(body)
+            val result = mutableListOf<Channel>()
 
-        val channels = mutableListOf<Channel>()
-        try {
-            // First load categories
-            val catUrl = "$server/player_api.php?username=$user&password=$pass&action=get_live_categories"
-            val catResponse = executeGet(catUrl)
-            val categoriesMap = mutableMapOf<String, String>()
-            if (catResponse.isNotBlank()) {
-                val catArray = JSONArray(catResponse)
-                for (i in 0 until catArray.length()) {
-                    val catObj = catArray.getJSONObject(i)
-                    categoriesMap[catObj.optString("category_id")] = catObj.optString("category_name")
-                }
-            }
+            for (i in 0 until array.length()) {
+                val obj = array.getJSONObject(i)
+                val streamId = obj.optInt("stream_id", 0)
+                val name = obj.optString("name", "Channel $streamId")
+                val streamIcon = obj.optString("stream_icon").takeIf { it.isNotBlank() }
+                val categoryName = obj.optString("category_name").takeIf { it.isNotBlank() } ?: "Live TV"
+                val streamUrl = "${account.serverUrl}/live/${account.username}/${account.password}/$streamId.m3u8"
 
-            // Load live streams
-            val streamsUrl = "$server/player_api.php?username=$user&password=$pass&action=get_live_streams"
-            val streamsResponse = executeGet(streamsUrl)
-            if (streamsResponse.isNotBlank()) {
-                val streamsArray = JSONArray(streamsResponse)
-                for (i in 0 until streamsArray.length()) {
-                    val obj = streamsArray.getJSONObject(i)
-                    val streamId = obj.opt("stream_id")?.toString()?.takeIf { it.isNotBlank() && it != "null" }
-                        ?: obj.optString("stream_id")
-                    if (streamId.isBlank()) continue
-                    val name = obj.optString("name").ifBlank { "Channel $streamId" }
-                    val icon = obj.optString("stream_icon").takeIf { it.isNotBlank() && it != "null" }
-                    val catId = obj.optString("category_id")
-                    val catName = categoriesMap[catId] ?: "Live TV"
-                    val streamUrl = "$server/live/$user/$pass/$streamId.ts"
-
-                    channels.add(
-                        Channel(
-                            id = "xtream_${account.id}_$streamId",
-                            name = name,
-                            streamUrl = streamUrl,
-                            logoUrl = icon,
-                            category = catName,
-                            language = "Live TV",
-                            country = "Live"
-                        )
+                result.add(
+                    Channel(
+                        id = "xtream_$streamId",
+                        name = name,
+                        logoUrl = streamIcon,
+                        category = categoryName,
+                        streamUrl = streamUrl,
+                        playlistName = "Xtream: ${account.name}"
                     )
-                }
+                )
             }
+            result
         } catch (e: Exception) {
-            Log.w("XtreamRepository", "Failed to load live streams: ${e.message}")
+            emptyList()
         }
-        channels
     }
 
-    suspend fun loadXtreamVod(account: XtreamAccountEntity): List<Channel> = withContext(Dispatchers.IO) {
-        val server = normalizeServerUrl(account.serverUrl)
-        val user = account.username
-        val pass = account.password
-
-        val movies = mutableListOf<Channel>()
+    suspend fun fetchVodStreams(account: XtreamAccountEntity): List<Channel> = withContext(Dispatchers.IO) {
+        val url = "${account.serverUrl}/player_api.php?username=${account.username}&password=${account.password}&action=get_vod_streams"
         try {
-            val vodCatUrl = "$server/player_api.php?username=$user&password=$pass&action=get_vod_categories"
-            val catResponse = executeGet(vodCatUrl)
-            val categoriesMap = mutableMapOf<String, String>()
-            if (catResponse.isNotBlank()) {
-                val catArray = JSONArray(catResponse)
-                for (i in 0 until catArray.length()) {
-                    val catObj = catArray.getJSONObject(i)
-                    categoriesMap[catObj.optString("category_id")] = catObj.optString("category_name")
-                }
-            }
+            val request = Request.Builder().url(url).build()
+            val response = okHttpClient.newCall(request).execute()
+            if (!response.isSuccessful) return@withContext emptyList()
 
-            val vodStreamsUrl = "$server/player_api.php?username=$user&password=$pass&action=get_vod_streams"
-            val streamsResponse = executeGet(vodStreamsUrl)
-            if (streamsResponse.isNotBlank()) {
-                val streamsArray = JSONArray(streamsResponse)
-                for (i in 0 until streamsArray.length()) {
-                    val obj = streamsArray.getJSONObject(i)
-                    val streamId = obj.opt("stream_id")?.toString()?.takeIf { it.isNotBlank() && it != "null" }
-                        ?: obj.optString("stream_id")
-                    if (streamId.isBlank()) continue
-                    val name = obj.optString("name").ifBlank { "Movie $streamId" }
-                    val icon = obj.optString("stream_icon").takeIf { it.isNotBlank() && it != "null" }
-                    val catId = obj.optString("category_id")
-                    val catName = categoriesMap[catId] ?: "Movies"
-                    val rawExt = obj.optString("container_extension")
-                    val ext = if (rawExt.isBlank() || rawExt == "null") "mp4" else rawExt.trim().lowercase().removePrefix(".")
-                    val streamUrl = "$server/movie/$user/$pass/$streamId.$ext"
+            val body = response.body?.string() ?: return@withContext emptyList()
+            val array = JSONArray(body)
+            val result = mutableListOf<Channel>()
 
-                    movies.add(
-                        Channel(
-                            id = "vod_${account.id}_$streamId",
-                            name = name,
-                            streamUrl = streamUrl,
-                            logoUrl = icon,
-                            category = catName,
-                            language = "Movie",
-                            country = "VOD"
-                        )
+            for (i in 0 until array.length()) {
+                val obj = array.getJSONObject(i)
+                val streamId = obj.optInt("stream_id", 0)
+                val name = obj.optString("name", "VOD $streamId")
+                val streamIcon = obj.optString("stream_icon").takeIf { it.isNotBlank() }
+                val categoryName = obj.optString("category_name").takeIf { it.isNotBlank() } ?: "VOD Movies"
+                val containerExtension = obj.optString("container_extension", "mp4")
+                val streamUrl = "${account.serverUrl}/movie/${account.username}/${account.password}/$streamId.$containerExtension"
+
+                result.add(
+                    Channel(
+                        id = "vod_$streamId",
+                        name = name,
+                        logoUrl = streamIcon,
+                        category = categoryName,
+                        streamUrl = streamUrl,
+                        playlistName = "Xtream VOD: ${account.name}"
                     )
-                }
+                )
             }
+            result
         } catch (e: Exception) {
-            Log.w("XtreamRepository", "Failed to load VOD streams: ${e.message}")
+            emptyList()
         }
-        movies
-    }
-
-    private fun normalizeServerUrl(rawUrl: String): String {
-        val trimmed = rawUrl.trim()
-        val withScheme = if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) "http://$trimmed" else trimmed
-        return withScheme
-            .removeSuffix("/player_api.php")
-            .removeSuffix("/get.php")
-            .removeSuffix("/c")
-            .removeSuffix("/")
-    }
-
-    private fun executeGet(urlString: String): String {
-        val url = URL(urlString)
-        val conn = url.openConnection() as HttpURLConnection
-        conn.connectTimeout = 12000
-        conn.readTimeout = 18000
-        conn.setRequestProperty("User-Agent", "IPTVSmartersPro/3.1.5 (Linux; Android 12)")
-        conn.setRequestProperty("Accept", "*/*")
-        conn.connect()
-
-        if (conn.responseCode in 200..299) {
-            val reader = BufferedReader(InputStreamReader(conn.inputStream))
-            val sb = java.lang.StringBuilder()
-            var line: String?
-            while (reader.readLine().also { line = it } != null) {
-                sb.append(line)
-            }
-            return sb.toString()
-        }
-        return ""
     }
 }

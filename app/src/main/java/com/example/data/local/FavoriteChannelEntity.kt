@@ -3,16 +3,14 @@ package com.example.data.local
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 
-@Entity(tableName = "favorites")
+@Entity(tableName = "favorite_channels")
 data class FavoriteChannelEntity(
-    @PrimaryKey
-    val streamUrl: String,
+    @PrimaryKey val streamUrl: String,
     val channelId: String,
     val name: String,
-    val logoUrl: String? = null,
-    val category: String = "General",
-    val language: String? = null,
-    val country: String? = null,
-    val playlistName: String? = null,
+    val logoUrl: String?,
+    val category: String,
+    val language: String?,
+    val country: String?,
     val addedAt: Long = System.currentTimeMillis()
 )

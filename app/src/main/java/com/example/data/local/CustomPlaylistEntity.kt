@@ -5,13 +5,8 @@ import androidx.room.PrimaryKey
 
 @Entity(tableName = "custom_playlists")
 data class CustomPlaylistEntity(
-    @PrimaryKey
-    val id: String,
-    val name: String,
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val title: String,
     val url: String,
-    val isFile: Boolean = false,
-    val channelCount: Int = 0,
-    val addedAt: Long = System.currentTimeMillis()
-) {
-    val title: String get() = name
-}
+    val createdAt: Long = System.currentTimeMillis()
+)

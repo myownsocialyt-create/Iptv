@@ -1,80 +1,49 @@
 package com.example.data.model
 
 data class CommunityPlaylist(
-    val id: String,
     val name: String,
     val description: String,
     val url: String,
-    val channelCountEstimate: Int,
-    val category: String,
-    val country: String? = null,
-    val flagEmoji: String = "📺"
-) {
-    val title: String get() = name
-}
+    val channelCount: String,
+    val category: String
+)
 
 object CommunityPlaylists {
-    const val PUBLIC_PLAYLISTS_URL = "https://github.com/iptv-org/iptv"
-
-    val presets = listOf(
+    val LIST = listOf(
         CommunityPlaylist(
-            id = "iptv_org_all",
-            name = "IPTV-org Global",
-            description = "Over 8,000 free, public broadcast channels worldwide",
+            name = "Free IPTV Global Index",
+            description = "Over 8,000 publicly broadcast international channels organized by category",
             url = "https://iptv-org.github.io/iptv/index.m3u",
-            channelCountEstimate = 8000,
-            category = "Global",
-            flagEmoji = "🌍"
+            channelCount = "8,000+ Channels",
+            category = "Global / General"
         ),
         CommunityPlaylist(
-            id = "iptv_org_in",
-            name = "India TV (National & Regional)",
-            description = "News, entertainment, movies, and sports across India",
+            name = "India TV Broadcasts",
+            description = "News, entertainment, movies, and regional television from India",
             url = "https://iptv-org.github.io/iptv/countries/in.m3u",
-            channelCountEstimate = 744,
-            category = "Regional",
-            country = "IN",
-            flagEmoji = "🇮🇳"
+            channelCount = "250+ Channels",
+            category = "Regional / India"
         ),
         CommunityPlaylist(
-            id = "iptv_org_us",
-            name = "United States TV",
-            description = "US national news, PBS, weather, and free local channels",
-            url = "https://iptv-org.github.io/iptv/countries/us.m3u",
-            channelCountEstimate = 650,
-            category = "Regional",
-            country = "US",
-            flagEmoji = "🇺🇸"
-        ),
-        CommunityPlaylist(
-            id = "iptv_org_uk",
-            name = "United Kingdom TV",
-            description = "UK public service broadcasts, news, and entertainment",
-            url = "https://iptv-org.github.io/iptv/countries/uk.m3u",
-            channelCountEstimate = 320,
-            category = "Regional",
-            country = "UK",
-            flagEmoji = "🇬🇧"
-        ),
-        CommunityPlaylist(
-            id = "iptv_org_news",
-            name = "24/7 Global News Network",
-            description = "Live English & multilingual international news channels",
+            name = "International News 24/7",
+            description = "Worldwide breaking news networks broadcasting live",
             url = "https://iptv-org.github.io/iptv/categories/news.m3u",
-            channelCountEstimate = 450,
-            category = "News",
-            flagEmoji = "📰"
+            channelCount = "400+ Channels",
+            category = "News"
         ),
         CommunityPlaylist(
-            id = "iptv_org_movies",
-            name = "Cinema & Classic Movies",
-            description = "Free retro, classic, and independent movie channels",
-            url = "https://iptv-org.github.io/iptv/categories/movies.m3u",
-            channelCountEstimate = 280,
-            category = "Movies",
-            flagEmoji = "🎬"
+            name = "Global Sports Live",
+            description = "Sports leagues, extreme outdoor sports, and racing broadcasts",
+            url = "https://iptv-org.github.io/iptv/categories/sports.m3u",
+            channelCount = "200+ Channels",
+            category = "Sports"
+        ),
+        CommunityPlaylist(
+            name = "Music & Concert Feeds",
+            description = "Continuous live music video streams and live concerts",
+            url = "https://iptv-org.github.io/iptv/categories/music.m3u",
+            channelCount = "300+ Channels",
+            category = "Music"
         )
     )
-
-    val ALL: List<CommunityPlaylist> get() = presets
 }

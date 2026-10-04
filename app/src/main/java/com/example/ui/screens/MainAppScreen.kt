@@ -158,15 +158,9 @@ fun MainAppScreen(
             playerManager = viewModel.playerManager,
             isFullscreen = uiState.isFullscreen,
             onToggleFullscreen = { viewModel.toggleFullscreen() },
-            onBack = { viewModel.closePlayer() },
-            selectedCategory = uiState.selectedCategory,
-            onCategorySelected = { viewModel.selectCategory(it) },
-            searchQuery = uiState.searchQuery,
-            onSearchQueryChanged = { viewModel.onSearchQueryChanged(it) },
-            onChannelClick = { viewModel.playChannel(it) },
+            onClosePlayer = { viewModel.closePlayer() },
+            onChannelSelect = { viewModel.playChannel(it) },
             onToggleFavorite = { viewModel.toggleFavorite(it) },
-            onPreviousChannel = { viewModel.playPreviousChannel() },
-            onNextChannel = { viewModel.playNextChannel() },
             modifier = modifier.fillMaxSize()
         )
         return
@@ -224,7 +218,6 @@ fun MainAppScreen(
                             selected = isSelected,
                             onClick = {
                                 selectedNav = item
-                                AdManager.onUserNavigated(context as? Activity)
                             },
                             icon = { Icon(item.icon, contentDescription = item.label, modifier = Modifier.size(20.dp)) },
                             label = { Text(item.label, fontSize = 9.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal) },
@@ -255,15 +248,17 @@ fun MainAppScreen(
                     onToggleFavorite = { viewModel.toggleFavorite(it) }
                 )
                 NavigationItem.CHANNELS -> ChannelListScreen(
+                    title = "All Channels",
                     channels = uiState.filteredChannels,
-                    categories = uiState.categories,
-                    selectedCategory = uiState.selectedCategory,
-                    onCategorySelected = { viewModel.selectCategory(it) },
+                    allChannels = uiState.channels,
                     searchQuery = uiState.searchQuery,
-                    onSearchQueryChanged = { viewModel.onSearchQueryChanged(it) },
-                    playingChannelUrl = uiState.activeChannel?.streamUrl,
+                    selectedCategory = uiState.selectedCategory,
+                    categories = uiState.categories,
+                    currentPlayingChannel = uiState.activeChannel,
                     isLoading = uiState.isLoading,
-                    onPlayChannel = { viewModel.playChannel(it) },
+                    onSearchQueryChange = { viewModel.onSearchQueryChanged(it) },
+                    onCategorySelect = { viewModel.selectCategory(it ?: "All") },
+                    onChannelClick = { viewModel.playChannel(it) },
                     onToggleFavorite = { viewModel.toggleFavorite(it) }
                 )
                 NavigationItem.CATEGORIES -> CategoriesScreen(

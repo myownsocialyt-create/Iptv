@@ -1,11 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <uses-permission android:name="android.intent.action.VIEW" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <uses-permission android:name="android.permission.WAKE_LOCK" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
 
     <application
         android:name=".HypnotixApp"
@@ -19,15 +17,15 @@
         android:theme="@style/Theme.Hypnotix"
         android:usesCleartextTraffic="true">
 
-        <!-- Google AdMob Application ID (Official Sample/Test ID) -->
+        <!-- Sample AdMob App ID for testing -->
         <meta-data
             android:name="com.google.android.gms.ads.APPLICATION_ID"
-            android:value="ca-app-pub-3940256099942544~3347511713" />
+            android:value="ca-app-pub-3940256099942544~3347511713"/>
 
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout"
             android:supportsPictureInPicture="true"
             android:theme="@style/Theme.Hypnotix">
             <intent-filter>

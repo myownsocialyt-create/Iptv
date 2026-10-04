@@ -22,12 +22,12 @@ abstract class IptvDatabase : RoomDatabase() {
         @Volatile
         private var INSTANCE: IptvDatabase? = null
 
-        fun getDatabase(context: Context): IptvDatabase {
+        fun getInstance(context: Context): IptvDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
                     context.applicationContext,
                     IptvDatabase::class.java,
-                    "hypnotix_iptv_database"
+                    "hypnotix_iptv_db"
                 )
                     .fallbackToDestructiveMigration()
                     .build()

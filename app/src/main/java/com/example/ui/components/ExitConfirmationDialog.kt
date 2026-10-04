@@ -1,53 +1,57 @@
 package com.example.ui.components
 
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.example.ui.theme.LocalAppColors
 import com.example.ui.theme.OttPrimary
 
 @Composable
 fun ExitConfirmationDialog(
-    onConfirm: () -> Unit,
+    onConfirmExit: () -> Unit,
     onDismiss: () -> Unit
 ) {
+    val appColors = LocalAppColors.current
+
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = Color(0xFF1E293B),
         title = {
-            Text(text = "Exit Hypnotix?", color = Color.White)
+            Text(
+                text = "Exit App",
+                fontWeight = FontWeight.Bold,
+                color = appColors.textPrimary
+            )
         },
         text = {
             Text(
-                text = "Are you sure you want to stop playback and exit the application?",
-                color = Color(0xFFCBD5E1)
+                text = "Are you sure you want to close Hypnotix?",
+                color = appColors.textSecondary,
+                fontSize = 14.sp
             )
         },
         confirmButton = {
             Button(
-                onClick = onConfirm,
+                onClick = onConfirmExit,
                 colors = ButtonDefaults.buttonColors(containerColor = OttPrimary),
-                shape = RoundedCornerShape(8.dp)
+                shape = RoundedCornerShape(10.dp)
             ) {
-                Text(text = "Exit", color = Color.White)
+                Text("Exit", fontWeight = FontWeight.Bold, color = Color.White)
             }
         },
         dismissButton = {
-            OutlinedButton(
-                onClick = onDismiss,
-                shape = RoundedCornerShape(8.dp)
-            ) {
-                Text(text = "Cancel", color = Color(0xFF94A3B8))
+            TextButton(onClick = onDismiss) {
+                Text("Cancel", color = appColors.textSecondary)
             }
-        }
+        },
+        containerColor = appColors.surface,
+        shape = RoundedCornerShape(16.dp)
     )
 }

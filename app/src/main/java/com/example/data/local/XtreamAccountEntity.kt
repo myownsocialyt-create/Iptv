@@ -5,14 +5,11 @@ import androidx.room.PrimaryKey
 
 @Entity(tableName = "xtream_accounts")
 data class XtreamAccountEntity(
-    @PrimaryKey
-    val id: String,
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val name: String,
     val serverUrl: String,
     val username: String,
     val password: String,
-    val isActive: Boolean = true,
-    val liveChannelsCount: Int = 0,
-    val vodCount: Int = 0,
-    val addedAt: Long = System.currentTimeMillis()
+    val isActive: Boolean = false,
+    val createdAt: Long = System.currentTimeMillis()
 )
