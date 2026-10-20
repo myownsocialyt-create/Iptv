@@ -1,943 +1,360 @@
 package com.example.ui.screens
 
-import android.app.Activity
-import android.content.pm.ActivityInfo
+import android.view.SurfaceView
+import android.view.ViewGroup
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBars
-import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Language
-import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.PlaylistPlay
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Tv
-import androidx.compose.material.icons.filled.VideoLibrary
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.DrawerValue
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.ModalDrawerSheet
-import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberDrawerState
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.max
 import androidx.compose.ui.unit.sp
-import coil.compose.AsyncImage
-import android.view.ViewGroup
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.media3.common.util.UnstableApi
-import androidx.media3.ui.AspectRatioFrameLayout
-import androidx.media3.ui.PlayerView
-import com.example.R
-import com.example.ad.AdManager
+import com.example.MainActivity
 import com.example.data.local.CustomPlaylistEntity
-import com.example.data.model.AppThemeMode
+import com.example.data.model.AppLanguage
 import com.example.data.model.Channel
-import com.example.player.PlayerState
+import com.example.data.model.CommunityPlaylists
 import com.example.data.repository.PlaylistSource
 import com.example.data.repository.PresetPlaylists
-import com.example.ui.components.AddPlaylistBottomSheet
-import com.example.ui.components.ExitConfirmationDialog
-import com.example.ui.components.LanguageSelectionDialog
-import com.example.ui.components.MediaNoticeLetterDialog
-import com.example.ui.components.NavigationItem
-import com.example.ui.components.NavigationSidebar
-import com.example.ui.components.ThemeSelectionDialog
+import com.example.player.IptvPlayerManager
+import com.example.player.IptvVideoPlayer
+import com.example.player.PlayerState
 import com.example.ui.i18n.LocalAppStrings
+import com.example.ui.i18n.stringsForLanguage
 import com.example.ui.theme.LocalAppColors
 import com.example.ui.theme.OttGold
-import com.example.ui.theme.OttLiveRed
-import com.example.ui.theme.OttPrimary
-import com.example.ui.theme.Slate900
 import com.example.ui.viewmodel.IptvViewModel
-import kotlinx.coroutines.launch
 
+enum class NavigationItem(val label: String, val icon: ImageVector, val tag: String) {
+    HOME("Home", Icons.Default.Home, "nav_home"),
+    CATEGORIES("Categories", Icons.Default.Category, "nav_categories"),
+    FAVORITES("Favorites", Icons.Default.Favorite, "nav_favorites"),
+    PLAYLISTS("Playlists", Icons.Default.PlaylistPlay, "nav_playlists"),
+    SETTINGS("Settings", Icons.Default.Settings, "nav_settings")
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainAppScreen(
     viewModel: IptvViewModel,
     isDarkTheme: Boolean,
     onToggleTheme: (Boolean) -> Unit,
-    isPipMode: Boolean = false,
+    isInPictureInPictureMode: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val coroutineScope = rememberCoroutineScope()
-    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
-
     val uiState by viewModel.uiState.collectAsState()
     val favorites by viewModel.favorites.collectAsState()
     val recents by viewModel.recents.collectAsState()
     val customPlaylists by viewModel.customPlaylists.collectAsState()
-    val xtreamAccounts by viewModel.xtreamAccounts.collectAsState()
-    val activeXtreamAccount by viewModel.activeXtreamAccount.collectAsState()
-    val xtreamChannels by viewModel.xtreamChannels.collectAsState()
-    val xtreamVodChannels by viewModel.xtreamVodChannels.collectAsState()
-    val isXtreamLoading by viewModel.isXtreamLoading.collectAsState()
-    val xtreamAuthError by viewModel.xtreamAuthError.collectAsState()
-    val isXtreamPlaybackMode by viewModel.isXtreamPlaybackMode.collectAsState()
-    val showMediaDisclaimerDialog by viewModel.showMediaDisclaimerDialog.collectAsState()
-
-    var selectedNav by remember { mutableStateOf(NavigationItem.HOME) }
-    var showAddPlaylistScreen by remember { mutableStateOf(false) }
-    var addPlaylistInitialTab by remember { mutableStateOf(0) }
-    var playlistSearchQuery by remember { mutableStateOf("") }
-    var showAddPlaylistBottomSheet by remember { mutableStateOf(false) }
-
-    // Dialog states
-    var showExitDialog by remember { mutableStateOf(false) }
-    var showThemeDialog by remember { mutableStateOf(false) }
-    var showLanguageDialog by remember { mutableStateOf(false) }
-    var showNoticeDialog by remember { mutableStateOf(false) }
-
-    // Back button handling
-    BackHandler {
-        when {
-            showAddPlaylistBottomSheet -> showAddPlaylistBottomSheet = false
-            drawerState.isOpen -> coroutineScope.launch { drawerState.close() }
-            uiState.isFullscreen -> {
-                com.example.ad.InStreamAdManager.suppressAdsTemporarily(3000L)
-                viewModel.setFullscreen(false)
-                (context as? Activity)?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_USER_PORTRAIT
-            }
-            uiState.isSplitViewMode -> {
-                com.example.ad.InStreamAdManager.suppressAdsTemporarily(3000L)
-                viewModel.minimizeToMiniPlayer()
-                (context as? Activity)?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_USER_PORTRAIT
-            }
-            showAddPlaylistScreen -> showAddPlaylistScreen = false
-            selectedNav != NavigationItem.HOME -> selectedNav = NavigationItem.HOME
-            else -> showExitDialog = true
-        }
-    }
-
-    // Dialogs
-    if (showExitDialog) {
-        ExitConfirmationDialog(
-            onConfirmExit = {
-                showExitDialog = false
-                viewModel.closePlayer()
-                (context as? Activity)?.finish()
-            },
-            onDismiss = { showExitDialog = false }
-        )
-    }
-
-    if (showThemeDialog) {
-        ThemeSelectionDialog(
-            isDarkTheme = isDarkTheme,
-            onThemeSelected = {
-                onToggleTheme(it)
-                showThemeDialog = false
-            },
-            onDismiss = { showThemeDialog = false }
-        )
-    }
-
-    if (showLanguageDialog) {
-        LanguageSelectionDialog(
-            currentLanguageCode = uiState.currentLanguage.code,
-            onLanguageSelected = {
-                viewModel.setLanguage(it)
-                showLanguageDialog = false
-            },
-            onDismiss = { showLanguageDialog = false }
-        )
-    }
-
-    if (showNoticeDialog || showMediaDisclaimerDialog) {
-        MediaNoticeLetterDialog(
-            onAccept = {
-                showNoticeDialog = false
-                viewModel.acceptMediaDisclaimer()
-            },
-            onDismiss = {
-                showNoticeDialog = false
-                viewModel.dismissMediaDisclaimer()
-            }
-        )
-    }
-
-    if (showAddPlaylistBottomSheet) {
-        AddPlaylistBottomSheet(
-            onDismissRequest = { showAddPlaylistBottomSheet = false },
-            onAddPlaylistUrlClick = {
-                showAddPlaylistBottomSheet = false
-                addPlaylistInitialTab = 0
-                showAddPlaylistScreen = true
-            },
-            onUploadFileClick = {
-                showAddPlaylistBottomSheet = false
-                addPlaylistInitialTab = 1
-                showAddPlaylistScreen = true
-            }
-        )
-    }
-
-    // If split-view mode is active (video playing), render HypnotixSplitScreen with strict mode separation
-    if (uiState.isSplitViewMode && uiState.activeChannel != null) {
-        val isXtreamPlayer = isXtreamPlaybackMode || uiState.activeChannel!!.isXtreamChannel
-        val favUrls = remember(favorites) { favorites.map { it.streamUrl }.toSet() }
-        val xtreamCombinedStreams = remember(xtreamVodChannels, xtreamChannels, favUrls) {
-            (xtreamVodChannels + xtreamChannels).map { ch ->
-                ch.copy(isFavorite = favUrls.contains(ch.streamUrl) || ch.isFavorite)
-            }
-        }
-        val xtreamCategories = remember(xtreamCombinedStreams) {
-            xtreamCombinedStreams.map { it.category }.filter { it.isNotBlank() }.distinct().sorted()
-        }
-        val effectiveXtreamAccount = activeXtreamAccount ?: xtreamAccounts.firstOrNull()
-
-        HypnotixSplitScreen(
-            channels = if (isXtreamPlayer) xtreamCombinedStreams else uiState.channels,
-            categories = if (isXtreamPlayer) xtreamCategories else uiState.categories,
-            activeChannel = uiState.activeChannel,
-            playerManager = viewModel.playerManager,
-            isFullscreen = uiState.isFullscreen,
-            isPipMode = isPipMode,
-            onToggleFullscreen = {
-                com.example.ad.InStreamAdManager.suppressAdsTemporarily(3000L)
-                val activity = context as? Activity
-                val willBeFullscreen = !uiState.isFullscreen
-                viewModel.setFullscreen(willBeFullscreen)
-                if (willBeFullscreen) {
-                    activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
-                } else {
-                    activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-                }
-            },
-            onEnterPip = {
-                com.example.ad.InStreamAdManager.suppressAdsTemporarily(3000L)
-                (context as? com.example.MainActivity)?.enterPipMode()
-            },
-            onClosePlayer = {
-                com.example.ad.InStreamAdManager.suppressAdsTemporarily(3000L)
-                viewModel.minimizeToMiniPlayer()
-                (context as? Activity)?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_USER_PORTRAIT
-            },
-            onChannelSelect = { selected ->
-                if (isXtreamPlayer) {
-                    viewModel.playXtreamChannel(selected)
-                } else {
-                    viewModel.playChannel(selected, forceXtreamMode = false)
-                }
-            },
-            onToggleFavorite = { viewModel.toggleFavorite(it) },
-            currentPlaylist = uiState.activePlaylistSource,
-            customPlaylists = customPlaylists,
-            deletedPresetIds = uiState.deletedPresetIds,
-            onSelectPlaylist = { viewModel.loadPlaylist(it) },
-            isLoading = if (isXtreamPlayer) isXtreamLoading else uiState.isLoading,
-            statusMessage = if (isXtreamPlayer) {
-                if (isXtreamLoading) "Loading Xtream Content..." else null
-            } else {
-                uiState.statusMessage
-            },
-            onRefresh = {
-                if (isXtreamPlayer) {
-                    viewModel.refreshXtreamChannels()
-                } else {
-                    viewModel.refreshPlaylistChannels()
-                }
-            },
-            isXtreamMode = isXtreamPlayer,
-            xtreamAccountName = effectiveXtreamAccount?.name ?: "Xtream Account",
-            xtreamAccounts = xtreamAccounts,
-            activeXtreamAccount = effectiveXtreamAccount,
-            onSelectXtreamAccount = { accountId ->
-                viewModel.setActiveXtreamAccount(accountId)
-            },
-            modifier = modifier.fillMaxSize()
-        )
-        return
-    }
-
-    // If Add Playlist screen is active
-    if (showAddPlaylistScreen) {
-        AddPlaylistScreen(
-            initialTab = addPlaylistInitialTab,
-            onAddPlaylist = { name, url ->
-                val entity = CustomPlaylistEntity(
-                    title = name,
-                    url = url
-                )
-                viewModel.addCustomPlaylist(entity)
-                showAddPlaylistScreen = false
-            },
-            onBackClick = { showAddPlaylistScreen = false }
-        )
-        return
-    }
 
     val appColors = LocalAppColors.current
-    val strings = LocalAppStrings.current
+    val strings = stringsForLanguage(uiState.currentLanguage)
 
-    ModalNavigationDrawer(
-        drawerState = drawerState,
-        drawerContent = {
-            ModalDrawerSheet(
-                drawerContainerColor = if (appColors.isDark) Color(0xFF0D0D0D) else Color.White,
-                drawerContentColor = appColors.textPrimary,
-                drawerTonalElevation = 0.dp,
-                modifier = Modifier.width(280.dp)
-            ) {
-                NavigationSidebar(
-                    selectedItem = selectedNav,
-                    onItemSelected = { item ->
-                        selectedNav = item
-                        coroutineScope.launch { drawerState.close() }
-                    },
-                    onOpenDisclaimerDialog = {
-                        showNoticeDialog = true
-                        coroutineScope.launch { drawerState.close() }
-                    }
-                )
+    var selectedNav by rememberSaveable { mutableStateOf(NavigationItem.HOME) }
+    var showAddPlaylistDialog by rememberSaveable { mutableStateOf(false) }
+
+    CompositionLocalProvider(LocalAppStrings provides strings) {
+        // When in Picture-in-Picture mode and a channel is active, render only the video player
+        if (isInPictureInPictureMode && uiState.activeChannel != null) {
+            IptvVideoPlayer(
+                channel = uiState.activeChannel!!,
+                playerManager = viewModel.playerManager,
+                isFullscreen = true,
+                isPipMode = true,
+                onToggleFullscreen = {},
+                onEnterPip = {},
+                onMinimizeToMiniPlayer = {},
+                modifier = Modifier.fillMaxSize()
+            )
+            return@CompositionLocalProvider
+        }
+
+        // Split-screen / Full-player view when a channel is expanded
+        if (uiState.isSplitViewMode && uiState.activeChannel != null) {
+            BackHandler {
+                if (uiState.isFullscreen) {
+                    viewModel.setFullscreen(false)
+                } else {
+                    viewModel.minimizeToMiniPlayer()
+                }
+            }
+            HypnotixSplitScreen(
+                channel = uiState.activeChannel!!,
+                channels = uiState.channels,
+                categories = uiState.categories,
+                selectedCategory = uiState.selectedCategory,
+                playerManager = viewModel.playerManager,
+                isFullscreen = uiState.isFullscreen,
+                onSelectCategory = viewModel::selectCategory,
+                onSelectChannel = { viewModel.playChannel(it, openSplitView = true) },
+                onToggleFavorite = viewModel::toggleFavorite,
+                onToggleFullscreen = { viewModel.setFullscreen(!uiState.isFullscreen) },
+                onMinimizeToMiniPlayer = viewModel::minimizeToMiniPlayer,
+                onEnterPip = {
+                    (context as? MainActivity)?.enterPipMode()
+                },
+                modifier = modifier.fillMaxSize()
+            )
+            return@CompositionLocalProvider
+        }
+
+        if (selectedNav != NavigationItem.HOME) {
+            BackHandler {
+                selectedNav = NavigationItem.HOME
             }
         }
-    ) {
+
         Scaffold(
-            contentWindowInsets = WindowInsets(0, 0, 0, 0),
+            containerColor = appColors.background,
             topBar = {
-                if (selectedNav != NavigationItem.XTREAM && selectedNav != NavigationItem.SETTINGS) {
-                    // Top App Bar matching Screenshot
-                    Surface(
-                        color = appColors.surface,
-                        shadowElevation = 0.5.dp,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .statusBarsPadding()
-                    ) {
-                        var showPlaylistMenu by remember { mutableStateOf(false) }
-
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            // 1. Hamburger Menu button
-                            IconButton(
-                                onClick = { coroutineScope.launch { drawerState.open() } },
-                                modifier = Modifier.size(38.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Menu,
-                                    contentDescription = "Open Drawer",
-                                    tint = appColors.textPrimary,
-                                    modifier = Modifier.size(24.dp)
-                                )
-                            }
-
-                            Spacer(modifier = Modifier.width(6.dp))
-
-                            // 2. App Logo: Red rounded square with white TV screen matching screenshot
-                            Surface(
-                                shape = RoundedCornerShape(10.dp),
-                                color = Color(0xFFE50914),
-                                modifier = Modifier.size(36.dp)
-                            ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Icon(
-                                        imageVector = Icons.Default.Tv,
-                                        contentDescription = "Hypnotix Logo",
-                                        tint = Color.White,
-                                        modifier = Modifier.size(22.dp)
-                                    )
-                                }
-                            }
-
+                TopAppBar(
+                    title = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.LiveTv,
+                                contentDescription = null,
+                                tint = OttGold,
+                                modifier = Modifier.size(24.dp)
+                            )
                             Spacer(modifier = Modifier.width(10.dp))
-
-                            // 3. Title & Subtitle matching user requirements
-                            Column(modifier = Modifier.weight(1f)) {
+                            Column {
                                 Text(
-                                    text = when (selectedNav) {
-                                        NavigationItem.CHANNELS -> strings.channel
-                                        NavigationItem.PLAYLISTS -> strings.playlists
-                                        NavigationItem.XTREAM -> strings.xtream
-                                        NavigationItem.SETTINGS -> strings.settings
-                                        NavigationItem.FAVORITES -> strings.favorites
-                                        NavigationItem.CATEGORIES -> strings.categories
-                                        else -> "Hypnotix"
-                                    },
+                                    text = strings.appName,
                                     color = appColors.textPrimary,
-                                    fontSize = 19.sp,
-                                    fontWeight = FontWeight.Bold
+                                    fontWeight = FontWeight.ExtraBold,
+                                    fontSize = 18.sp
                                 )
                                 Text(
-                                    text = when (selectedNav) {
-                                        NavigationItem.CHANNELS -> {
-                                            if (!uiState.hasSelectedFirstPlaylist || uiState.channelSelectedPlaylist.id == "none") {
-                                                "No Playlist"
-                                            } else {
-                                                val pl = when (uiState.channelSelectedPlaylist.id) {
-                                                    PresetPlaylists.INDIA.id -> "India"
-                                                    PresetPlaylists.GLOBAL.id -> "Global"
-                                                    PresetPlaylists.ALL.id -> "All"
-                                                    else -> uiState.channelSelectedPlaylist.title.replace(" Channels", "").ifBlank { "Global" }
-                                                }
-                                                "$pl ${strings.channel}"
-                                            }
-                                        }
-                                        NavigationItem.PLAYLISTS -> {
-                                            if (!uiState.hasSelectedFirstPlaylist || uiState.selectedPlaylist.id == "none") {
-                                                "No Playlist"
-                                            } else {
-                                                strings.managePlaylists
-                                            }
-                                        }
-                                        NavigationItem.XTREAM -> strings.iptvAccounts
-                                        NavigationItem.SETTINGS -> strings.preferences
-                                        NavigationItem.FAVORITES -> strings.savedChannels
-                                        NavigationItem.CATEGORIES -> strings.browseCategories
-                                        else -> if (!uiState.hasSelectedFirstPlaylist || uiState.selectedPlaylist.id == "none") "No Playlist" else "Global Channels"
-                                    },
-                                    color = appColors.textSecondary,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Normal
+                                    text = uiState.activePlaylistSource.title,
+                                    color = OttGold,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Medium
                                 )
-                            }
-
-                            // 4. Search icon button
-                            IconButton(
-                                onClick = {
-                                    if (selectedNav != NavigationItem.PLAYLISTS && selectedNav != NavigationItem.CHANNELS) {
-                                        selectedNav = NavigationItem.CHANNELS
-                                    }
-                                },
-                                modifier = Modifier.size(38.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Search,
-                                    contentDescription = "Search",
-                                    tint = appColors.textPrimary,
-                                    modifier = Modifier.size(22.dp)
-                                )
-                            }
-
-                            // 5. Playlist Dropdown Pill Button only on HOME tab
-                            if (selectedNav == NavigationItem.HOME) {
-                                Spacer(modifier = Modifier.width(6.dp))
-
-                                Box {
-                                    val isNone = !uiState.hasSelectedFirstPlaylist || uiState.selectedPlaylist.id == "none"
-                                    val playlistLabel = if (isNone) {
-                                        "Add Playlist"
-                                    } else {
-                                        when (uiState.selectedPlaylist.id) {
-                                            PresetPlaylists.INDIA.id -> "India"
-                                            PresetPlaylists.GLOBAL.id -> "Global"
-                                            PresetPlaylists.ALL.id -> "All"
-                                            else -> uiState.selectedPlaylist.title.replace(" Channels", "").ifBlank { "Global" }
-                                        }
-                                    }
-
-                                    Surface(
-                                        shape = RoundedCornerShape(20.dp),
-                                        color = if (appColors.isDark) Color(0xFF1E293B) else Color(0xFFE0F2FE),
-                                        border = BorderStroke(1.dp, if (appColors.isDark) Color(0xFF334155) else Color(0xFFBAE6FD)),
-                                        modifier = Modifier
-                                            .height(34.dp)
-                                            .clickable {
-                                                if (isNone) {
-                                                    selectedNav = NavigationItem.PLAYLISTS
-                                                } else {
-                                                    showPlaylistMenu = true
-                                                }
-                                            }
-                                            .testTag("top_bar_playlist_pill")
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.padding(horizontal = 10.dp),
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Icon(
-                                                imageVector = if (isNone) Icons.Default.Add else Icons.Default.Language,
-                                                contentDescription = null,
-                                                tint = if (isNone) OttPrimary else Color(0xFF0284C7),
-                                                modifier = Modifier.size(16.dp)
-                                            )
-                                            Spacer(modifier = Modifier.width(5.dp))
-                                            Text(
-                                                text = playlistLabel,
-                                                color = appColors.textPrimary,
-                                                fontSize = 13.sp,
-                                                fontWeight = FontWeight.Bold
-                                            )
-                                            Spacer(modifier = Modifier.width(3.dp))
-                                            Icon(
-                                                imageVector = Icons.Default.ArrowDropDown,
-                                                contentDescription = null,
-                                                tint = appColors.textPrimary,
-                                                modifier = Modifier.size(18.dp)
-                                            )
-                                        }
-                                    }
-
-                                    DropdownMenu(
-                                        expanded = showPlaylistMenu,
-                                        onDismissRequest = { showPlaylistMenu = false }
-                                    ) {
-                                        DropdownMenuItem(
-                                            text = { Text("Global Channels") },
-                                            onClick = {
-                                                viewModel.selectPlaylist(PresetPlaylists.GLOBAL)
-                                                showPlaylistMenu = false
-                                            }
-                                        )
-                                        DropdownMenuItem(
-                                            text = { Text("India Channels") },
-                                            onClick = {
-                                                viewModel.selectPlaylist(PresetPlaylists.INDIA)
-                                                showPlaylistMenu = false
-                                            }
-                                        )
-                                        DropdownMenuItem(
-                                            text = { Text("All Channels") },
-                                            onClick = {
-                                                viewModel.selectPlaylist(PresetPlaylists.ALL)
-                                                showPlaylistMenu = false
-                                            }
-                                        )
-                                        customPlaylists.forEach { cp ->
-                                            DropdownMenuItem(
-                                                text = { Text(cp.title) },
-                                                onClick = {
-                                                    viewModel.selectPlaylist(
-                                                        PlaylistSource(
-                                                            id = "custom_${cp.id}",
-                                                            title = cp.title,
-                                                            url = cp.url,
-                                                            isPreset = false
-                                                        )
-                                                    )
-                                                    showPlaylistMenu = false
-                                                }
-                                            )
-                                        }
-                                    }
-                                }
                             }
                         }
-                    }
-                }
+                    },
+                    actions = {
+                        IconButton(
+                            onClick = { showAddPlaylistDialog = true },
+                            modifier = Modifier.testTag("top_add_playlist_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Add,
+                                contentDescription = strings.addPlaylist,
+                                tint = OttGold
+                            )
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = appColors.surface
+                    )
+                )
             },
             bottomBar = {
-                // Window Insets calculation for navigation bar
-                val navBarInsets = WindowInsets.navigationBars.asPaddingValues()
-                val navBottomInset = navBarInsets.calculateBottomPadding()
-
                 Column(
-                    modifier = if (selectedNav == NavigationItem.SETTINGS) {
-                        Modifier.padding(bottom = if (navBottomInset > 0.dp) navBottomInset else 4.dp)
-                    } else {
-                        Modifier
-                    }
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(appColors.surface)
                 ) {
-                    // YouTube-style Docked MiniPlayer with live video playback when minimized
+                    // YouTube-style Bottom Mini-Player (when channel is playing & minimized)
                     if (uiState.activeChannel != null && !uiState.isSplitViewMode) {
                         DockedMiniPlayer(
                             channel = uiState.activeChannel!!,
                             playerManager = viewModel.playerManager,
                             onExpandFullscreen = { viewModel.restoreFromMiniPlayer() },
+                            onEnterPipMode = {
+                                (context as? MainActivity)?.enterPipMode()
+                            },
                             onClose = { viewModel.closePlayer() }
                         )
                     }
 
-                    // Completely hide 5 bottom buttons when inside Settings (matching screenshot)
-                    if (selectedNav != NavigationItem.SETTINGS) {
-                        // Bottom Navigation Bar with 3D popped-out center red (+) button
-                        // Box container allows the center button to stick out of the top without being clipped
-                        Box(
-                            modifier = Modifier.fillMaxWidth(),
-                            contentAlignment = Alignment.BottomCenter
-                        ) {
-                            // 1. Bottom Surface: Starts 18.dp lower so center red button pops out cleanly above it
-                            Surface(
-                                color = appColors.surface,
-                                shadowElevation = 8.dp,
-                                border = BorderStroke(0.5.dp, appColors.border),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .align(Alignment.BottomCenter)
-                                    .padding(top = 18.dp)
-                            ) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(
-                                            start = 4.dp,
-                                            end = 4.dp,
-                                            top = 6.dp,
-                                            bottom = if (navBottomInset > 24.dp) navBottomInset else 6.dp
-                                        ),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceAround
-                                ) {
-                                    // 1. Home
-                                    BottomNavPillItem(
-                                        icon = Icons.Default.Home,
-                                        label = strings.home,
-                                        isSelected = selectedNav == NavigationItem.HOME,
-                                        onClick = {
-                                            selectedNav = NavigationItem.HOME
-                                            AdManager.onUserNavigated(context as? Activity)
-                                        }
+                    NavigationBar(
+                        containerColor = appColors.surface,
+                        tonalElevation = 8.dp
+                    ) {
+                        NavigationItem.entries.forEach { item ->
+                            NavigationBarItem(
+                                selected = selectedNav == item,
+                                onClick = { selectedNav = item },
+                                icon = {
+                                    Icon(
+                                        imageVector = item.icon,
+                                        contentDescription = item.label
                                     )
-
-                                    // 2. Channel
-                                    BottomNavPillItem(
-                                        icon = Icons.Default.Tv,
-                                        label = strings.channel,
-                                        isSelected = selectedNav == NavigationItem.CHANNELS,
-                                        onClick = {
-                                            selectedNav = NavigationItem.CHANNELS
-                                            AdManager.onUserNavigated(context as? Activity)
-                                        }
+                                },
+                                label = {
+                                    Text(
+                                        text = item.label,
+                                        fontSize = 11.sp,
+                                        maxLines = 1
                                     )
-
-                                    // Gap for center button
-                                    Spacer(modifier = Modifier.width(58.dp))
-
-                                    // 4. Xtream
-                                    BottomNavPillItem(
-                                        icon = Icons.Default.VideoLibrary,
-                                        label = strings.xtream,
-                                        isSelected = selectedNav == NavigationItem.XTREAM,
-                                        onClick = {
-                                            selectedNav = NavigationItem.XTREAM
-                                            AdManager.onUserNavigated(context as? Activity)
-                                        }
-                                    )
-
-                                    // 5. Playlists
-                                    BottomNavPillItem(
-                                        icon = Icons.Default.GridView,
-                                        label = strings.playlists,
-                                        isSelected = selectedNav == NavigationItem.PLAYLISTS,
-                                        onClick = {
-                                            selectedNav = NavigationItem.PLAYLISTS
-                                            AdManager.onUserNavigated(context as? Activity)
-                                        }
-                                    )
-                                }
-                            }
-
-                            // 2. Center 3D Popped-out Squircle Red Plus Button
-                            // Sits at Alignment.TopCenter of the Box, fully visible with 0 top cutoff!
-                            Box(
-                                modifier = Modifier
-                                    .align(Alignment.TopCenter)
-                                    .padding(bottom = if (navBottomInset > 24.dp) (navBottomInset - 2.dp) else 4.dp)
-                            ) {
-                                Center3DNavFab(
-                                    onClick = {
-                                        showAddPlaylistBottomSheet = true
-                                    }
-                                )
-                            }
+                                },
+                                colors = NavigationBarItemDefaults.colors(
+                                    selectedIconColor = Color.Black,
+                                    selectedTextColor = OttGold,
+                                    indicatorColor = OttGold,
+                                    unselectedIconColor = appColors.textSecondary,
+                                    unselectedTextColor = appColors.textSecondary
+                                ),
+                                modifier = Modifier.testTag(item.tag)
+                            )
                         }
                     }
                 }
             },
-            containerColor = appColors.background,
-            modifier = modifier.fillMaxSize()
-        ) { padding ->
+            modifier = modifier
+        ) { innerPadding ->
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(padding)
+                    .padding(innerPadding)
             ) {
                 when (selectedNav) {
-                    NavigationItem.HOME -> HomeScreen(
+                    NavigationItem.HOME -> HomeScreenContent(
                         channels = uiState.channels,
-                        allChannels = uiState.allChannels,
-                        favorites = favorites,
-                        recents = recents,
-                        currentPlayingChannel = uiState.activeChannel,
-                        currentPlaylist = uiState.selectedPlaylist,
-                        currentLanguage = uiState.currentLanguage,
-                        isLoading = uiState.isLoading,
-                        statusMessage = uiState.statusMessage,
-                        searchQuery = uiState.searchQuery,
-                        isSearchActive = uiState.searchQuery.isNotEmpty(),
-                        hasSelectedFirstPlaylist = uiState.hasSelectedFirstPlaylist,
-                        onChannelClick = { viewModel.playChannel(it, forceXtreamMode = false) },
-                        onToggleFavorite = { viewModel.toggleFavorite(it) },
-                        onCategoryClick = {
-                            viewModel.selectCategory(it)
-                            selectedNav = NavigationItem.CHANNELS
-                        },
-                        onAddPlaylistClick = {
-                            showAddPlaylistBottomSheet = true
-                        },
-                        onViewAllPlaylistsClick = { selectedNav = NavigationItem.PLAYLISTS },
-                        onXtreamClick = { selectedNav = NavigationItem.XTREAM },
-                        onRefresh = { viewModel.refreshPlaylistChannels() }
-                    )
-                    NavigationItem.CHANNELS -> ChannelListScreen(
-                        title = "Channels",
-                        channels = uiState.channels,
-                        allChannels = uiState.allChannels,
-                        searchQuery = uiState.searchQuery,
-                        selectedCategory = uiState.selectedCategory,
                         categories = uiState.categories,
-                        currentPlayingChannel = uiState.activeChannel,
-                        currentPlaylist = uiState.channelSelectedPlaylist,
+                        selectedCategory = uiState.selectedCategory,
+                        searchQuery = uiState.searchQuery,
+                        recents = recents,
+                        activeChannel = uiState.activeChannel,
                         isLoading = uiState.isLoading,
-                        statusMessage = uiState.statusMessage,
-                        hasSelectedFirstPlaylist = uiState.hasSelectedFirstPlaylist,
-                        onSearchQueryChange = { viewModel.onSearchQueryChanged(it) },
-                        onCategorySelect = { viewModel.selectCategory(it) },
-                        onChannelClick = { viewModel.playChannel(it, forceXtreamMode = false) },
-                        onToggleFavorite = { viewModel.toggleFavorite(it) },
-                        onRefresh = { viewModel.refreshPlaylistChannels() },
-                        onNavigateToPlaylists = { selectedNav = NavigationItem.PLAYLISTS }
+                        onSearchQueryChange = viewModel::updateSearchQuery,
+                        onSelectCategory = viewModel::selectCategory,
+                        onSelectChannel = { ch -> viewModel.playChannel(ch, openSplitView = true) },
+                        onToggleFavorite = viewModel::toggleFavorite
                     )
-                    NavigationItem.CATEGORIES -> CategoriesScreen(
+                    NavigationItem.CATEGORIES -> CategoriesScreenContent(
+                        categories = uiState.categories,
+                        selectedCategory = uiState.selectedCategory,
                         channels = uiState.channels,
-                        searchQuery = uiState.searchQuery,
-                        onSearchQueryChange = { viewModel.setSearchQuery(it) },
-                        hasSelectedFirstPlaylist = uiState.hasSelectedFirstPlaylist,
-                        onNavigateToPlaylists = { selectedNav = NavigationItem.PLAYLISTS },
-                        onSelectCategory = {
-                            viewModel.selectCategory(it)
-                            selectedNav = NavigationItem.CHANNELS
-                        }
+                        onSelectCategory = viewModel::selectCategory,
+                        onSelectChannel = { ch -> viewModel.playChannel(ch, openSplitView = true) },
+                        onToggleFavorite = viewModel::toggleFavorite
                     )
-                    NavigationItem.FAVORITES -> FavoritesScreen(
+                    NavigationItem.FAVORITES -> FavoritesScreenContent(
                         favorites = favorites,
-                        currentPlayingChannel = uiState.activeChannel,
-                        searchQuery = uiState.searchQuery,
-                        onSearchQueryChange = { viewModel.setSearchQuery(it) },
-                        onChannelClick = { viewModel.playChannel(it) },
-                        onToggleFavorite = { viewModel.toggleFavorite(it) }
+                        onSelectChannel = { ch -> viewModel.playChannel(ch, openSplitView = true) },
+                        onToggleFavorite = viewModel::toggleFavorite
                     )
-                    NavigationItem.PLAYLISTS -> PlaylistsScreen(
-                        currentPlaylist = uiState.selectedPlaylist,
+                    NavigationItem.PLAYLISTS -> PlaylistsScreenContent(
+                        activeSource = uiState.activePlaylistSource,
                         customPlaylists = customPlaylists,
-                        searchQuery = playlistSearchQuery,
-                        onSearchQueryChange = { playlistSearchQuery = it },
-                        deletedPresetIds = uiState.deletedPresetIds,
-                        onDeletePresetPlaylist = { viewModel.deletePresetPlaylist(it) },
-                        hasSelectedFirstPlaylist = uiState.hasSelectedFirstPlaylist,
-                        onSelectPlaylist = { viewModel.selectPlaylist(it) },
-                        onDeleteCustomPlaylist = { viewModel.deleteCustomPlaylist(it) },
-                        onNavigateToAddPlaylist = { tab ->
-                            addPlaylistInitialTab = tab
-                            showAddPlaylistScreen = true
-                        }
+                        onSelectSource = viewModel::loadPlaylist,
+                        onDeleteCustom = viewModel::deleteCustomPlaylist,
+                        onOpenAddDialog = { showAddPlaylistDialog = true }
                     )
-                    NavigationItem.XTREAM -> XtreamScreen(
-                        accounts = xtreamAccounts,
-                        activeAccount = activeXtreamAccount ?: xtreamAccounts.firstOrNull(),
-                        xtreamChannels = xtreamChannels,
-                        xtreamVodChannels = xtreamVodChannels,
-                        isLoading = isXtreamLoading,
-                        authError = xtreamAuthError,
-                        currentPlayingChannel = uiState.activeChannel,
-                        onAddAccount = { name, url, user, pass, onComplete ->
-                            viewModel.addXtreamAccount(name, url, user, pass, onComplete)
-                        },
-                        onClearAuthError = { viewModel.clearXtreamAuthError() },
-                        onSetActiveAccount = { viewModel.setActiveXtreamAccount(it) },
-                        onDeleteAccount = { viewModel.deleteXtreamAccount(it) },
-                        onPlayChannel = { viewModel.playXtreamChannel(it) },
-                        onToggleFavorite = { viewModel.toggleFavorite(it) },
-                        onBackClick = { selectedNav = NavigationItem.HOME }
-                    )
-                    NavigationItem.SETTINGS -> SettingsScreen(
+                    NavigationItem.SETTINGS -> SettingsScreenContent(
+                        isDarkTheme = isDarkTheme,
                         currentLanguage = uiState.currentLanguage,
-                        currentThemeMode = uiState.currentThemeMode,
-                        autoReconnectEnabled = uiState.autoReconnectEnabled,
-                        searchQuery = uiState.searchQuery,
-                        onSearchQueryChange = { viewModel.setSearchQuery(it) },
-                        onToggleAutoReconnect = { viewModel.setAutoReconnectEnabled(it) },
-                        onSelectLanguage = { viewModel.setLanguage(it) },
-                        onSelectThemeMode = {
-                            viewModel.setThemeMode(it)
-                            onToggleTheme(it == AppThemeMode.DARK)
-                        },
-                        onBackClick = { selectedNav = NavigationItem.HOME }
+                        onToggleTheme = onToggleTheme,
+                        onSelectLanguage = viewModel::setLanguage
                     )
                 }
             }
         }
-    }
-}
 
-@Composable
-private fun Center3DNavFab(
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    // 3D Popped-out Squircle Red Plus Button with ambient glow halo
-    // Fully rendered with zero top cutoff
-    Box(
-        modifier = modifier
-            .size(54.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        // Outer soft red ambient glow halo
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .clip(RoundedCornerShape(20.dp))
-                .background(Color(0xFFE50914).copy(alpha = 0.28f))
-        )
-
-        // Main 3D Squircle Button
-        Box(
-            modifier = Modifier
-                .size(46.dp)
-                .shadow(elevation = 6.dp, shape = RoundedCornerShape(16.dp))
-                .border(
-                    width = 1.dp,
-                    brush = Brush.verticalGradient(
-                        listOf(
-                            Color.White.copy(alpha = 0.65f),
-                            Color(0xFFFF7B7B).copy(alpha = 0.3f),
-                            Color(0xFF7F1D1D)
-                        )
-                    ),
-                    shape = RoundedCornerShape(16.dp)
-                )
-                .clip(RoundedCornerShape(16.dp))
-                .background(
-                    brush = Brush.verticalGradient(
-                        listOf(
-                            Color(0xFFDC2626), // Vibrant red top
-                            Color(0xFFB91C1C), // Rich crimson mid
-                            Color(0xFF7F1D1D)  // Deep shadow bottom
-                        )
-                    )
-                )
-                .clickable(onClick = onClick)
-                .testTag("center_nav_fab_button"),
-            contentAlignment = Alignment.Center
-        ) {
-            // Upper glossy specular highlight
-            Box(
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .fillMaxWidth()
-                    .height(18.dp)
-                    .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
-                    .background(
-                        brush = Brush.verticalGradient(
-                            listOf(
-                                Color.White.copy(alpha = 0.35f),
-                                Color.Transparent
-                            )
-                        )
-                    )
-            )
-
-            // Bold White Plus Icon
-            Icon(
-                imageVector = Icons.Default.Add,
-                contentDescription = "Add Playlist",
-                tint = Color.White,
-                modifier = Modifier.size(28.dp)
+        if (showAddPlaylistDialog) {
+            AddPlaylistDialog(
+                onDismiss = { showAddPlaylistDialog = false },
+                onAdd = { name, url ->
+                    viewModel.addCustomPlaylist(name, url)
+                    showAddPlaylistDialog = false
+                }
             )
         }
     }
 }
 
-@Composable
-private fun BottomNavPillItem(
-    icon: ImageVector,
-    label: String,
-    isSelected: Boolean,
-    onClick: () -> Unit
-) {
-    val appColors = LocalAppColors.current
-    val unselectedColor = if (appColors.isDark) Color(0xFF94A3B8) else Color(0xFF64748B)
-    Column(
-        modifier = Modifier
-            .clickable(onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 2.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = label,
-            tint = if (isSelected) Color(0xFFDC2626) else unselectedColor,
-            modifier = Modifier.size(24.dp)
-        )
-        Spacer(modifier = Modifier.height(2.dp))
-        Text(
-            text = label,
-            color = if (isSelected) Color(0xFFDC2626) else unselectedColor,
-            fontSize = 11.sp,
-            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
-        )
-    }
-}
-
-@androidx.annotation.OptIn(UnstableApi::class)
+/**
+ * YouTube-style Docked Bottom Mini-Player with:
+ * - Live video preview surface on the left
+ * - Channel title + LIVE / Playing status in the middle
+ * - Picture-in-Picture (PiP) button on the left of Play/Pause (`mini_player_pip`)
+ * - Play/Pause button (`mini_player_play_pause`)
+ * - Close / Cut button (`mini_player_close`)
+ */
 @Composable
 fun DockedMiniPlayer(
     channel: Channel,
-    playerManager: com.example.player.IptvPlayerManager,
+    playerManager: IptvPlayerManager,
     onExpandFullscreen: () -> Unit,
+    onEnterPipMode: () -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -946,20 +363,8 @@ fun DockedMiniPlayer(
     val playbackState by playerManager.playbackState.collectAsState()
     val currentPosition by playerManager.currentPosition.collectAsState()
     val duration by playerManager.duration.collectAsState()
-    val isMovie = channel.isMovieOrVod || duration > 0L
 
-    fun formatMiniDuration(ms: Long): String {
-        val totalSec = (ms / 1000).coerceAtLeast(0)
-        val hrs = totalSec / 3600
-        val mins = (totalSec % 3600) / 60
-        val secs = totalSec % 60
-        return if (hrs > 0) {
-            String.format("%d:%02d:%02d", hrs, mins, secs)
-        } else {
-            String.format("%02d:%02d", mins, secs)
-        }
-    }
-
+    val isMovie = channel.isMovieOrVod() || duration > 0L
     val progressFraction = if (duration > 0L) {
         (currentPosition.toFloat() / duration.toFloat()).coerceIn(0f, 1f)
     } else {
@@ -969,170 +374,117 @@ fun DockedMiniPlayer(
     Card(
         shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(
-            containerColor = if (appColors.isDark) Color(0xFF141824) else Color(0xFF1E293B)
+            containerColor = if (appColors.isDark) Color(0xFF141824) else Color(0xFF1E223B)
         ),
         elevation = CardDefaults.cardElevation(defaultElevation = 10.dp),
         border = BorderStroke(1.dp, Color.White.copy(alpha = 0.16f)),
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 8.dp, vertical = 4.dp)
-            .pointerInput(Unit) {
-                detectVerticalDragGestures { _, dragAmount ->
-                    if (dragAmount < -22f) {
-                        onExpandFullscreen()
-                    } else if (dragAmount > 35f) {
-                        onClose()
-                    }
-                }
-            }
-            .clickable(onClick = onExpandFullscreen)
+            .clickable { onExpandFullscreen() }
             .testTag("docked_mini_player")
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
             Row(
+                verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(68.dp)
-                    .padding(start = 6.dp, end = 6.dp, top = 5.dp, bottom = 5.dp),
-                verticalAlignment = Alignment.CenterVertically
+                    .padding(horizontal = 8.dp, vertical = 6.dp)
             ) {
-                // YouTube-style 16:9 Live Video Preview Box on the left
+                // Left: Mini video surface preview
                 Box(
                     modifier = Modifier
-                        .width(108.dp)
-                        .height(58.dp)
-                        .clip(RoundedCornerShape(9.dp))
+                        .width(110.dp)
+                        .height(62.dp)
+                        .clip(RoundedCornerShape(10.dp))
                         .background(Color.Black)
-                        .clickable(onClick = onExpandFullscreen)
-                        .testTag("mini_player_video_box"),
-                    contentAlignment = Alignment.Center
+                        .clickable { onExpandFullscreen() }
                 ) {
-                    // Backdrop Channel Logo while frames render
-                    com.example.ui.components.ChannelLogo(
-                        channel = channel,
-                        modifier = Modifier.fillMaxSize(),
-                        imagePadding = 8.dp,
-                        fontSize = 13.sp,
-                        showCategoryIcon = false,
-                        cornerRadius = 9.dp
-                    )
-
-                    // Live ExoPlayer SurfaceView inside Mini-Player
                     AndroidView(
                         factory = { ctx ->
-                            PlayerView(ctx).apply {
+                            SurfaceView(ctx).apply {
                                 layoutParams = ViewGroup.LayoutParams(
                                     ViewGroup.LayoutParams.MATCH_PARENT,
                                     ViewGroup.LayoutParams.MATCH_PARENT
                                 )
-                                useController = false
-                                keepScreenOn = true
-                                resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-                                val activeExo = playerManager.getPlayer()
-                                player = activeExo
-                                (videoSurfaceView as? android.view.SurfaceView)?.let {
-                                    activeExo.setVideoSurfaceView(it)
-                                }
+                                playerManager.attachSurfaceView(this)
                             }
                         },
-                        update = { playerView ->
-                            val activeExo = playerManager.getPlayer()
-                            if (playerView.player != activeExo) {
-                                playerView.player = activeExo
-                            }
-                            (playerView.videoSurfaceView as? android.view.SurfaceView)?.let {
-                                activeExo.setVideoSurfaceView(it)
-                            }
-                        },
-                        onReset = {},
-                        onRelease = { playerView ->
-                            playerView.player = null
+                        update = { surfaceView ->
+                            playerManager.attachSurfaceView(surfaceView)
                         },
                         modifier = Modifier.fillMaxSize()
                     )
 
-                    // Subtle buffering spinner overlay
-                    if (playbackState is PlayerState.Connecting || playbackState is PlayerState.Buffering) {
-                        Box(
+                    if (playbackState == PlayerState.BUFFERING) {
+                        CircularProgressIndicator(
+                            color = OttGold,
+                            strokeWidth = 2.dp,
                             modifier = Modifier
-                                .fillMaxSize()
-                                .background(Color.Black.copy(alpha = 0.35f)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(18.dp),
-                                strokeWidth = 2.dp,
-                                color = OttPrimary
-                            )
-                        }
-                    }
-
-                    // LIVE / MOVIE Badge in bottom-left of mini video
-                    Surface(
-                        color = if (isMovie) OttGold else OttLiveRed,
-                        shape = RoundedCornerShape(4.dp),
-                        modifier = Modifier
-                            .align(Alignment.BottomStart)
-                            .padding(3.dp)
-                    ) {
-                        Text(
-                            text = if (isMovie) "MOVIE" else "LIVE",
-                            color = if (isMovie) Color.Black else Color.White,
-                            fontSize = 7.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                            modifier = Modifier.padding(horizontal = 3.5.dp, vertical = 1.dp)
+                                .size(20.dp)
+                                .align(Alignment.Center)
                         )
                     }
                 }
 
                 Spacer(modifier = Modifier.width(10.dp))
 
-                // Title & Category / Time Info
+                // Middle: Channel title + LIVE / status badge
                 Column(
                     modifier = Modifier
                         .weight(1f)
-                        .clickable(onClick = onExpandFullscreen),
-                    verticalArrangement = Arrangement.Center
+                        .clickable { onExpandFullscreen() }
                 ) {
                     Text(
                         text = channel.name,
                         color = Color.White,
-                        fontSize = 13.5.sp,
                         fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                    Spacer(modifier = Modifier.height(2.dp))
+                    Spacer(modifier = Modifier.height(3.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = channel.category.ifBlank { if (channel.isXtreamChannel) "Xtream" else "Live TV" },
-                            color = Color.White.copy(alpha = 0.72f),
-                            fontSize = 11.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f, fill = false)
+                        Box(
+                            modifier = Modifier
+                                .size(6.dp)
+                                .background(
+                                    if (isMovie) OttGold else Color(0xFFFF3B30),
+                                    CircleShape
+                                )
                         )
-                        if (isMovie && duration > 0L) {
-                            Text(
-                                text = " • ${formatMiniDuration(currentPosition)} / ${formatMiniDuration(duration)}",
-                                color = OttGold,
-                                fontSize = 10.5.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                maxLines = 1
-                            )
-                        } else {
-                            Text(
-                                text = if (isPlaying) " • Playing" else " • Paused",
-                                color = if (isPlaying) Color(0xFF4ADE80) else Color.White.copy(alpha = 0.6f),
-                                fontSize = 10.5.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                maxLines = 1
-                            )
-                        }
+                        Spacer(modifier = Modifier.width(5.dp))
+                        Text(
+                            text = if (isMovie) "MOVIE" else "LIVE",
+                            color = if (isMovie) OttGold else Color(0xFFFF3B30),
+                            fontSize = 10.5.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = if (isPlaying) " • Playing" else " • Paused",
+                            color = if (isPlaying) Color(0xFF4ADE80) else Color.White.copy(alpha = 0.6f),
+                            fontSize = 10.5.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1
+                        )
                     }
                 }
 
-                // Play / Pause Button
+                // Right controls: [PiP] [Play/Pause] [Close / Cut]
+                IconButton(
+                    onClick = onEnterPipMode,
+                    modifier = Modifier
+                        .size(40.dp)
+                        .testTag("mini_player_pip")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.PictureInPictureAlt,
+                        contentDescription = "Picture in Picture",
+                        tint = Color.White.copy(alpha = 0.9f),
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+
                 IconButton(
                     onClick = { playerManager.togglePlayPause() },
                     modifier = Modifier
@@ -1147,7 +499,6 @@ fun DockedMiniPlayer(
                     )
                 }
 
-                // Close (X) Button to completely exit video
                 IconButton(
                     onClick = onClose,
                     modifier = Modifier
@@ -1163,20 +514,641 @@ fun DockedMiniPlayer(
                 }
             }
 
-            // Bottom YouTube-style Red Progress / Live Bar
-            Box(
+            LinearProgressIndicator(
+                progress = { progressFraction },
+                color = if (isMovie) OttGold else Color(0xFFFF3B30),
+                trackColor = Color.White.copy(alpha = 0.12f),
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(2.5.dp)
-                    .background(Color.White.copy(alpha = 0.15f))
+            )
+        }
+    }
+}
+
+@Composable
+fun HypnotixSplitScreen(
+    channel: Channel,
+    channels: List<Channel>,
+    categories: List<String>,
+    selectedCategory: String,
+    playerManager: IptvPlayerManager,
+    isFullscreen: Boolean,
+    onSelectCategory: (String) -> Unit,
+    onSelectChannel: (Channel) -> Unit,
+    onToggleFavorite: (Channel) -> Unit,
+    onToggleFullscreen: () -> Unit,
+    onMinimizeToMiniPlayer: () -> Unit,
+    onEnterPip: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val appColors = LocalAppColors.current
+
+    if (isFullscreen) {
+        IptvVideoPlayer(
+            channel = channel,
+            playerManager = playerManager,
+            isFullscreen = true,
+            isPipMode = false,
+            onToggleFullscreen = onToggleFullscreen,
+            onEnterPip = onEnterPip,
+            onMinimizeToMiniPlayer = onMinimizeToMiniPlayer,
+            modifier = modifier.fillMaxSize()
+        )
+        return
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .background(appColors.background)
+    ) {
+        IptvVideoPlayer(
+            channel = channel,
+            playerManager = playerManager,
+            isFullscreen = false,
+            isPipMode = false,
+            onToggleFullscreen = onToggleFullscreen,
+            onEnterPip = onEnterPip,
+            onMinimizeToMiniPlayer = onMinimizeToMiniPlayer,
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(16f / 9f)
+        )
+
+        // Active channel details strip with Minimize & PiP shortcuts
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(appColors.surface)
+                .padding(horizontal = 14.dp, vertical = 10.dp)
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = channel.name,
+                    color = appColors.textPrimary,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = "${channel.category} • ${channel.country}",
+                    color = appColors.textSecondary,
+                    fontSize = 12.sp
+                )
+            }
+            IconButton(
+                onClick = { onToggleFavorite(channel) },
+                modifier = Modifier.testTag("split_favorite_button")
             ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth(progressFraction)
-                        .height(2.5.dp)
-                        .background(Color(0xFFE50914))
+                Icon(
+                    imageVector = if (channel.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                    contentDescription = "Favorite",
+                    tint = if (channel.isFavorite) Color(0xFFFF3B30) else appColors.textSecondary
+                )
+            }
+            IconButton(
+                onClick = onEnterPip,
+                modifier = Modifier.testTag("split_pip_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Default.PictureInPictureAlt,
+                    contentDescription = "Picture in Picture",
+                    tint = OttGold
+                )
+            }
+        }
+
+        // Category filter row
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+        ) {
+            categories.forEach { cat ->
+                FilterChip(
+                    selected = selectedCategory == cat,
+                    onClick = { onSelectCategory(cat) },
+                    label = { Text(cat, fontSize = 12.sp) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = OttGold,
+                        selectedLabelColor = Color.Black
+                    )
+                )
+            }
+        }
+
+        // Channel list below the video player
+        LazyColumn(
+            contentPadding = PaddingValues(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.weight(1f)
+        ) {
+            items(channels, key = { it.id }) { item ->
+                ChannelRowCard(
+                    channel = item,
+                    isActive = item.id == channel.id,
+                    onClick = { onSelectChannel(item) },
+                    onToggleFavorite = { onToggleFavorite(item) }
                 )
             }
         }
     }
+}
+
+@Composable
+private fun HomeScreenContent(
+    channels: List<Channel>,
+    categories: List<String>,
+    selectedCategory: String,
+    searchQuery: String,
+    recents: List<Channel>,
+    activeChannel: Channel?,
+    isLoading: Boolean,
+    onSearchQueryChange: (String) -> Unit,
+    onSelectCategory: (String) -> Unit,
+    onSelectChannel: (Channel) -> Unit,
+    onToggleFavorite: (Channel) -> Unit
+) {
+    val appColors = LocalAppColors.current
+    val strings = LocalAppStrings.current
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        OutlinedTextField(
+            value = searchQuery,
+            onValueChange = onSearchQueryChange,
+            placeholder = { Text(strings.searchPlaceholder, fontSize = 13.sp) },
+            leadingIcon = {
+                Icon(Icons.Default.Search, contentDescription = null, tint = OttGold)
+            },
+            trailingIcon = {
+                if (searchQuery.isNotEmpty()) {
+                    IconButton(onClick = { onSearchQueryChange("") }) {
+                        Icon(Icons.Default.Close, contentDescription = "Clear")
+                    }
+                }
+            },
+            singleLine = true,
+            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+                .testTag("channel_search_input")
+        )
+
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 12.dp, vertical = 4.dp)
+        ) {
+            categories.forEach { cat ->
+                FilterChip(
+                    selected = selectedCategory == cat,
+                    onClick = { onSelectCategory(cat) },
+                    label = { Text(cat, fontSize = 12.sp) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = OttGold,
+                        selectedLabelColor = Color.Black
+                    )
+                )
+            }
+        }
+
+        if (isLoading) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = OttGold)
+            }
+        } else {
+            LazyColumn(
+                contentPadding = PaddingValues(12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.fillMaxSize()
+            ) {
+                if (recents.isNotEmpty() && searchQuery.isBlank()) {
+                    item {
+                        Text(
+                            text = strings.continueWatching,
+                            color = appColors.textPrimary,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 15.sp,
+                            modifier = Modifier.padding(bottom = 6.dp)
+                        )
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            items(recents, key = { "recent_${it.id}" }) { recent ->
+                                Card(
+                                    colors = CardDefaults.cardColors(containerColor = appColors.cardBackground),
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier
+                                        .width(160.dp)
+                                        .clickable { onSelectChannel(recent) }
+                                ) {
+                                    Column(modifier = Modifier.padding(12.dp)) {
+                                        Text(
+                                            text = recent.name,
+                                            color = appColors.textPrimary,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 13.sp,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(
+                                            text = recent.category,
+                                            color = OttGold,
+                                            fontSize = 11.sp,
+                                            maxLines = 1
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                item {
+                    Text(
+                        text = "${strings.featuredChannels} (${channels.size})",
+                        color = appColors.textPrimary,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp
+                    )
+                }
+
+                items(channels, key = { it.id }) { channel ->
+                    ChannelRowCard(
+                        channel = channel,
+                        isActive = activeChannel?.id == channel.id,
+                        onClick = { onSelectChannel(channel) },
+                        onToggleFavorite = { onToggleFavorite(channel) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChannelRowCard(
+    channel: Channel,
+    isActive: Boolean,
+    onClick: () -> Unit,
+    onToggleFavorite: () -> Unit
+) {
+    val appColors = LocalAppColors.current
+    Card(
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isActive) OttGold.copy(alpha = 0.16f) else appColors.cardBackground
+        ),
+        border = if (isActive) BorderStroke(1.dp, OttGold) else BorderStroke(1.dp, appColors.border),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .testTag("channel_card_${channel.id}")
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 12.dp)
+        ) {
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(OttGold.copy(alpha = 0.2f))
+            ) {
+                Icon(
+                    imageVector = Icons.Default.LiveTv,
+                    contentDescription = null,
+                    tint = OttGold,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = channel.name,
+                    color = appColors.textPrimary,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "${channel.category} • ${channel.country}",
+                    color = appColors.textSecondary,
+                    fontSize = 12.sp
+                )
+            }
+            IconButton(onClick = onToggleFavorite) {
+                Icon(
+                    imageVector = if (channel.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                    contentDescription = "Favorite",
+                    tint = if (channel.isFavorite) Color(0xFFFF3B30) else appColors.textSecondary
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CategoriesScreenContent(
+    categories: List<String>,
+    selectedCategory: String,
+    channels: List<Channel>,
+    onSelectCategory: (String) -> Unit,
+    onSelectChannel: (Channel) -> Unit,
+    onToggleFavorite: (Channel) -> Unit
+) {
+    HomeScreenContent(
+        channels = channels,
+        categories = categories,
+        selectedCategory = selectedCategory,
+        searchQuery = "",
+        recents = emptyList(),
+        activeChannel = null,
+        isLoading = false,
+        onSearchQueryChange = {},
+        onSelectCategory = onSelectCategory,
+        onSelectChannel = onSelectChannel,
+        onToggleFavorite = onToggleFavorite
+    )
+}
+
+@Composable
+private fun FavoritesScreenContent(
+    favorites: List<Channel>,
+    onSelectChannel: (Channel) -> Unit,
+    onToggleFavorite: (Channel) -> Unit
+) {
+    val appColors = LocalAppColors.current
+    val strings = LocalAppStrings.current
+
+    if (favorites.isEmpty()) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text(
+                text = strings.noFavoritesYet,
+                color = appColors.textSecondary,
+                fontSize = 15.sp
+            )
+        }
+    } else {
+        LazyColumn(
+            contentPadding = PaddingValues(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            items(favorites, key = { it.id }) { channel ->
+                ChannelRowCard(
+                    channel = channel,
+                    isActive = false,
+                    onClick = { onSelectChannel(channel) },
+                    onToggleFavorite = { onToggleFavorite(channel) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlaylistsScreenContent(
+    activeSource: PlaylistSource,
+    customPlaylists: List<CustomPlaylistEntity>,
+    onSelectSource: (PlaylistSource) -> Unit,
+    onDeleteCustom: (Long) -> Unit,
+    onOpenAddDialog: () -> Unit
+) {
+    val appColors = LocalAppColors.current
+
+    LazyColumn(
+        contentPadding = PaddingValues(14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+        modifier = Modifier.fillMaxSize()
+    ) {
+        item {
+            Row(
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = "Built-in & Community M3U Playlists",
+                    color = appColors.textPrimary,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp
+                )
+                Button(
+                    onClick = onOpenAddDialog,
+                    colors = ButtonDefaults.buttonColors(containerColor = OttGold, contentColor = Color.Black),
+                    modifier = Modifier.testTag("add_custom_playlist_button")
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Add M3U", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
+            }
+        }
+
+        items(PresetPlaylists.defaultPresets, key = { it.id }) { preset ->
+            val isSelected = activeSource.id == preset.id
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = if (isSelected) OttGold.copy(alpha = 0.18f) else appColors.cardBackground
+                ),
+                border = BorderStroke(1.dp, if (isSelected) OttGold else appColors.border),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onSelectSource(preset) }
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Text(preset.title, color = appColors.textPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    Text(preset.description, color = appColors.textSecondary, fontSize = 12.sp)
+                }
+            }
+        }
+
+        items(customPlaylists, key = { "custom_${it.id}" }) { custom ->
+            val source = PlaylistSource.Custom(custom.id, custom.name, custom.url)
+            val isSelected = activeSource.id == source.id
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = if (isSelected) OttGold.copy(alpha = 0.18f) else appColors.cardBackground
+                ),
+                border = BorderStroke(1.dp, if (isSelected) OttGold else appColors.border),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onSelectSource(source) }
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(14.dp)
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(custom.name, color = appColors.textPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                        Text(custom.url, color = appColors.textSecondary, fontSize = 11.sp, maxLines = 1)
+                    }
+                    IconButton(onClick = { onDeleteCustom(custom.id) }) {
+                        Icon(Icons.Default.Delete, contentDescription = "Delete", tint = Color(0xFFFF3B30))
+                    }
+                }
+            }
+        }
+
+        item {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "Community Curated Packs",
+                color = appColors.textPrimary,
+                fontWeight = FontWeight.Bold,
+                fontSize = 15.sp
+            )
+        }
+
+        items(CommunityPlaylists.featured, key = { it.id }) { pack ->
+            Card(
+                colors = CardDefaults.cardColors(containerColor = appColors.cardBackground),
+                border = BorderStroke(1.dp, appColors.border),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable {
+                        onSelectSource(PlaylistSource.Preset(pack.id, pack.name, pack.url, pack.description))
+                    }
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(14.dp)
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(pack.name, color = appColors.textPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        Text(pack.description, color = appColors.textSecondary, fontSize = 12.sp)
+                    }
+                    Text(pack.channelCountHint, color = OttGold, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsScreenContent(
+    isDarkTheme: Boolean,
+    currentLanguage: AppLanguage,
+    onToggleTheme: (Boolean) -> Unit,
+    onSelectLanguage: (AppLanguage) -> Unit
+) {
+    val appColors = LocalAppColors.current
+
+    Column(
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        Card(
+            colors = CardDefaults.cardColors(containerColor = appColors.cardBackground),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp)
+            ) {
+                Column {
+                    Text("Dark Mode Theme", color = appColors.textPrimary, fontWeight = FontWeight.Bold)
+                    Text("Cinema dark appearance for live TV", color = appColors.textSecondary, fontSize = 12.sp)
+                }
+                Switch(
+                    checked = isDarkTheme,
+                    onCheckedChange = onToggleTheme,
+                    modifier = Modifier.testTag("dark_theme_switch")
+                )
+            }
+        }
+
+        Text(
+            text = "App Language",
+            color = appColors.textPrimary,
+            fontWeight = FontWeight.Bold,
+            fontSize = 15.sp
+        )
+
+        AppLanguage.entries.forEach { lang ->
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = if (currentLanguage == lang) OttGold.copy(alpha = 0.2f) else appColors.cardBackground
+                ),
+                border = BorderStroke(1.dp, if (currentLanguage == lang) OttGold else appColors.border),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onSelectLanguage(lang) }
+            ) {
+                Row(
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(14.dp)
+                ) {
+                    Text(lang.displayName, color = appColors.textPrimary, fontWeight = FontWeight.Medium)
+                    Text(lang.nativeName, color = OttGold, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AddPlaylistDialog(
+    onDismiss: () -> Unit,
+    onAdd: (String, String) -> Unit
+) {
+    var name by remember { mutableStateOf("") }
+    var url by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Add M3U Playlist") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Playlist Name") },
+                    singleLine = true,
+                    modifier = Modifier.testTag("playlist_name_input")
+                )
+                OutlinedTextField(
+                    value = url,
+                    onValueChange = { url = it },
+                    label = { Text("M3U / M3U8 URL") },
+                    singleLine = true,
+                    modifier = Modifier.testTag("playlist_url_input")
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onAdd(name, url) },
+                enabled = name.isNotBlank() && url.isNotBlank(),
+                modifier = Modifier.testTag("confirm_add_playlist_button")
+            ) {
+                Text("Add")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
 }

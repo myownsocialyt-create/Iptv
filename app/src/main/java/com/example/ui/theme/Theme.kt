@@ -1,118 +1,82 @@
 package com.example.ui.theme
 
-import android.app.Activity
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.SideEffect
-import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.platform.LocalView
-import androidx.core.view.WindowCompat
 
-data class AppColors(
+val OttGold = Color(0xFFF5B301)
+val OttCyan = Color(0xFF00E5FF)
+
+@Immutable
+data class AppThemeColors(
+    val isDark: Boolean,
     val background: Color,
     val surface: Color,
-    val surfaceVariant: Color,
-    val border: Color,
+    val cardBackground: Color,
     val textPrimary: Color,
     val textSecondary: Color,
-    val primary: Color,
-    val textMuted: Color = Color(0xFF64748B),
-    val isDark: Boolean = false
+    val border: Color
 )
 
-typealias AppThemeColors = AppColors
-
-val DarkAppColors = AppColors(
-    background = Color(0xFF000000), // OLED True Black #000000
-    surface = Color(0xFF0D0D0D),    // OLED True Black Dark Surface
-    surfaceVariant = Color(0xFF171717),
-    border = Color(0xFF262626),
-    textPrimary = Color(0xFFFFFFFF),
-    textSecondary = Color(0xFFA1A1AA),
-    primary = OttPrimary,
-    textMuted = Color(0xFF71717A),
-    isDark = true
+val DarkAppColors = AppThemeColors(
+    isDark = true,
+    background = Color(0xFF0B0E17),
+    surface = Color(0xFF121624),
+    cardBackground = Color(0xFF191F30),
+    textPrimary = Color(0xFFF8FAFC),
+    textSecondary = Color(0xFF94A3B8),
+    border = Color(0xFF262F45)
 )
 
-val LightAppColors = AppColors(
-    background = Color(0xFFF8FAFC),
+val LightAppColors = AppThemeColors(
+    isDark = false,
+    background = Color(0xFFF4F6FB),
     surface = Color(0xFFFFFFFF),
-    surfaceVariant = Color(0xFFF1F5F9),
-    border = Color(0xFFE2E8F0),
+    cardBackground = Color(0xFFFFFFFF),
     textPrimary = Color(0xFF0F172A),
-    textSecondary = Color(0xFF64748B),
-    primary = OttPrimary,
-    textMuted = Color(0xFF94A3B8),
-    isDark = false
+    textSecondary = Color(0xFF475569),
+    border = Color(0xFFE2E8F0)
 )
 
-val LocalAppColors = compositionLocalOf { LightAppColors }
+val LocalAppColors = staticCompositionLocalOf { DarkAppColors }
 
-private val DarkColorScheme = darkColorScheme(
-    primary = OttPrimary,
-    secondary = OttSecondary,
-    tertiary = OttGold,
-    background = Color(0xFF000000), // OLED True Black
-    surface = Color(0xFF0D0D0D),
-    onPrimary = Color.White,
-    onSecondary = Color.White,
-    onTertiary = Color.Black,
-    onBackground = Color.White,
-    onSurface = Color.White
+private val DarkColors = darkColorScheme(
+    primary = OttGold,
+    secondary = OttCyan,
+    background = DarkAppColors.background,
+    surface = DarkAppColors.surface,
+    onPrimary = Color.Black,
+    onBackground = DarkAppColors.textPrimary,
+    onSurface = DarkAppColors.textPrimary
 )
 
-private val LightColorScheme = lightColorScheme(
-    primary = OttPrimary,
-    secondary = OttSecondary,
-    tertiary = OttGold,
-    background = Color(0xFFF8FAFC),
-    surface = Color(0xFFFFFFFF),
-    onPrimary = Color.White,
-    onSecondary = Color.White,
-    onTertiary = Color.Black,
-    onBackground = Color(0xFF0F172A),
-    onSurface = Color(0xFF0F172A)
+private val LightColors = lightColorScheme(
+    primary = OttGold,
+    secondary = OttCyan,
+    background = LightAppColors.background,
+    surface = LightAppColors.surface,
+    onPrimary = Color.Black,
+    onBackground = LightAppColors.textPrimary,
+    onSurface = LightAppColors.textPrimary
 )
 
 @Composable
 fun HypnotixTheme(
-    darkTheme: Boolean = false,
+    darkTheme: Boolean = true,
     content: @Composable () -> Unit
 ) {
-    val colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme
     val appColors = if (darkTheme) DarkAppColors else LightAppColors
-
-    val view = LocalView.current
-    if (!view.isInEditMode) {
-        SideEffect {
-            val window = (view.context as Activity).window
-            window.statusBarColor = colorScheme.background.toArgb()
-            window.navigationBarColor = colorScheme.background.toArgb()
-            WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !darkTheme
-        }
-    }
+    val colorScheme = if (darkTheme) DarkColors else LightColors
 
     CompositionLocalProvider(LocalAppColors provides appColors) {
         MaterialTheme(
             colorScheme = colorScheme,
-            typography = Typography,
             content = content
         )
     }
 }
-
-@Composable
-fun MyApplicationTheme(
-    darkTheme: Boolean = true,
-    themeMode: Any? = null,
-    content: @Composable () -> Unit
-) {
-    HypnotixTheme(darkTheme = darkTheme, content = content)
-}
-

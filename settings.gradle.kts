@@ -13,5 +13,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Hypnotix"
+rootProject.name = "HypnotixIPTV"
 include(":app")
