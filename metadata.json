@@ -1,6 +1,6 @@
 {
-  "name": "Hypnotix IPTV",
-  "description": "Live TV & M3U IPTV Streaming Player with YouTube-style Mini-Player and Picture-in-Picture (PiP) support.",
+  "name": "Hypnotix",
+  "description": "Full-featured Native Android IPTV Player with Media3 ExoPlayer, Hypnotix OTT layout, M3U playlists, and Room favorites.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

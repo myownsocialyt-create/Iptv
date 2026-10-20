@@ -1,6 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Hypnotix IPTV</string>
-    <string name="pip_button_description">Enter Picture in Picture mode</string>
-    <string name="play_pause_description">Play or Pause</string>
-    <string name="close_player_description">Close Mini Player</string>
+    <string name="app_name">Hypnotix</string>
+    <string name="google_app_id" translatable="false">1:100000000000:android:hypnotixiptv</string>
 </resources>
