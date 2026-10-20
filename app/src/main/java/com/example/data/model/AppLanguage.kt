@@ -1,7 +1,12 @@
 package com.example.data.model
 
-enum class AppLanguage(val code: String, val displayName: String, val nativeName: String, val flagEmoji: String) {
-    ENGLISH("en", "English", "English", "🇺🇸"),
+enum class AppLanguage(
+    val code: String,
+    val displayName: String,
+    val nativeName: String,
+    val flagEmoji: String
+) {
+    ENGLISH("en", "English", "English", "🇬🇧"),
     HINDI("hi", "Hindi", "हिन्दी", "🇮🇳"),
     SPANISH("es", "Spanish", "Español", "🇪🇸"),
     FRENCH("fr", "French", "Français", "🇫🇷"),
@@ -17,7 +22,10 @@ enum class AppLanguage(val code: String, val displayName: String, val nativeName
     }
 }
 
-enum class AppThemeMode(val key: String, val label: String) {
+enum class AppThemeMode(
+    val key: String,
+    val label: String
+) {
     SYSTEM("system", "System Default"),
     LIGHT("light", "Light Mode"),
     DARK("dark", "Dark Mode");

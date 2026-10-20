@@ -122,14 +122,11 @@ class PlaylistRepository(
             }
 
             if (parsedChannels.isNotEmpty()) {
-                val verifiedChannels = when (source.id) {
-                    PresetPlaylists.INDIA.id -> PresetPlaylists.FALLBACK_INDIA_CHANNELS
-                    PresetPlaylists.GLOBAL.id -> PresetPlaylists.FALLBACK_GLOBAL_CHANNELS
-                    else -> emptyList()
-                }
-                val prioritized = (verifiedChannels + parsedChannels).distinctBy { it.streamUrl }
-                playlistCache[source.url] = prioritized
-                emit(prioritized)
+                val cleanChannels = parsedChannels
+                    .filter { !it.isXtreamChannel && !it.isMovieOrVod }
+                    .distinctBy { it.streamUrl }
+                playlistCache[source.url] = cleanChannels
+                emit(cleanChannels)
             }
         } catch (e: Exception) {
             // Keep previous cached/fallback if network fails
@@ -170,7 +167,11 @@ class PlaylistRepository(
                 Channel(
                     id = entity.channelId,
                     name = entity.name,
-                    logoUrl = entity.logoUrl,
+                    logoUrl = com.example.ui.components.ChannelLogoResolver.resolvePrimaryLogo(
+                        rawLogoUrl = entity.logoUrl,
+                        channelName = entity.name,
+                        category = entity.category
+                    ),
                     category = entity.category,
                     language = entity.language,
                     country = entity.country,
@@ -194,7 +195,11 @@ class PlaylistRepository(
                 Channel(
                     id = entity.channelId,
                     name = entity.name,
-                    logoUrl = entity.logoUrl,
+                    logoUrl = com.example.ui.components.ChannelLogoResolver.resolvePrimaryLogo(
+                        rawLogoUrl = entity.logoUrl,
+                        channelName = entity.name,
+                        category = entity.category
+                    ),
                     category = entity.category,
                     language = entity.language,
                     country = entity.country,
@@ -238,6 +243,10 @@ class PlaylistRepository(
                 country = channel.country
             )
         )
+    }
+
+    suspend fun clearRecents() = withContext(Dispatchers.IO) {
+        channelDao.clearRecents()
     }
 
     fun observeCustomPlaylists(): Flow<List<CustomPlaylistEntity>> {

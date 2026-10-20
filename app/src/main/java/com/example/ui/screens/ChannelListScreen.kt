@@ -22,17 +22,21 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.FilterList
+import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.TvOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
@@ -40,20 +44,28 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
 import com.example.data.model.Channel
 import com.example.data.repository.PlaylistSource
 import com.example.data.repository.PresetPlaylists
 import com.example.ui.components.ChannelListItem
 import com.example.ui.components.ChannelListShimmer
+import com.example.ui.components.StartWatchingLiveTvCard
+import com.example.ui.i18n.LocalAppStrings
 import com.example.ui.theme.LocalAppColors
 import com.example.ui.theme.OttPrimary
 
@@ -79,6 +91,9 @@ fun ChannelListScreen(
     modifier: Modifier = Modifier
 ) {
     val appColors = LocalAppColors.current
+    val strings = LocalAppStrings.current
+    val isDark = appColors.isDark
+    var isGridView by remember { mutableStateOf(false) }
 
     val categoryCounts = remember(channels) {
         channels.groupingBy { it.category }.eachCount()
@@ -124,13 +139,75 @@ fun ChannelListScreen(
                 .widthIn(max = 1300.dp)
                 .align(Alignment.TopCenter)
         ) {
-            // Category Filter Chips & Refresh Button Bar
+            // Top Search Bar & Category Filter Chips Row matching screenshot
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(appColors.surface)
-                    .padding(horizontal = horizontalListPadding, vertical = 8.dp)
+                    .padding(horizontal = horizontalListPadding, vertical = 6.dp)
             ) {
+                // Channel Search Bar
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = appColors.surfaceVariant,
+                    border = BorderStroke(1.dp, appColors.border),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp)
+                        .testTag("channel_search_bar")
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Search,
+                            contentDescription = "Search Channels",
+                            tint = appColors.textMuted,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        BasicTextField(
+                            value = searchQuery,
+                            onValueChange = onSearchQueryChange,
+                            singleLine = true,
+                            textStyle = TextStyle(
+                                color = appColors.textPrimary,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Medium
+                            ),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("channel_search_input"),
+                            decorationBox = { innerTextField ->
+                                if (searchQuery.isEmpty()) {
+                                    Text(
+                                        text = strings.searchChannelsHint,
+                                        color = appColors.textMuted,
+                                        fontSize = 14.sp
+                                    )
+                                }
+                                innerTextField()
+                            }
+                        )
+                        if (searchQuery.isNotEmpty()) {
+                            IconButton(
+                                onClick = { onSearchQueryChange("") },
+                                modifier = Modifier.size(22.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Clear search",
+                                    tint = appColors.textMuted,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
@@ -142,48 +219,60 @@ fun ChannelListScreen(
                             .testTag("channel_category_chips_row")
                     ) {
                         item {
-                            FilterChip(
-                                selected = selectedCategory == null,
-                                onClick = { onCategorySelect(null) },
-                                label = {
-                                    Text(
-                                        text = "All (${channels.size})",
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
-                                },
-                                colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = OttPrimary,
-                                    selectedLabelColor = Color.White,
-                                    containerColor = appColors.surfaceVariant,
-                                    labelColor = appColors.textSecondary
-                                ),
-                                shape = RoundedCornerShape(16.dp)
-                            )
+                            val isSelected = selectedCategory == null
+                            Surface(
+                                shape = RoundedCornerShape(20.dp),
+                                color = if (isSelected) {
+                                    if (isDark) Color(0xFF27272A) else Color(0xFFF1F5F9)
+                                } else appColors.surface,
+                                border = BorderStroke(1.dp, if (isSelected) appColors.textPrimary else appColors.border),
+                                modifier = Modifier.clickable { onCategorySelect(null) }
+                            ) {
+                                Text(
+                                    text = "${strings.viewAll} (${channels.size})",
+                                    color = appColors.textPrimary,
+                                    fontSize = 13.sp,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                                )
+                            }
                         }
 
                         itemsIndexed(categories, key = { index, cat -> "${cat}_$index" }) { _, cat ->
                             val isSelected = selectedCategory.equals(cat, ignoreCase = true)
                             val count = categoryCounts[cat] ?: 0
-                            FilterChip(
-                                selected = isSelected,
-                                onClick = { onCategorySelect(if (isSelected) null else cat) },
-                                label = {
-                                    Text(
-                                        text = "$cat ($count)",
-                                        fontSize = 12.sp,
-                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                                    )
-                                },
-                                colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = OttPrimary,
-                                    selectedLabelColor = Color.White,
-                                    containerColor = appColors.surfaceVariant,
-                                    labelColor = appColors.textSecondary
-                                ),
-                                shape = RoundedCornerShape(16.dp)
-                            )
+                            Surface(
+                                shape = RoundedCornerShape(20.dp),
+                                color = if (isSelected) {
+                                    if (isDark) Color(0xFF27272A) else Color(0xFFF1F5F9)
+                                } else appColors.surface,
+                                border = BorderStroke(1.dp, if (isSelected) appColors.textPrimary else appColors.border),
+                                modifier = Modifier.clickable { onCategorySelect(if (isSelected) null else cat) }
+                            ) {
+                                Text(
+                                    text = "$cat ($count)",
+                                    color = appColors.textPrimary,
+                                    fontSize = 13.sp,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                                )
+                            }
                         }
+                    }
+
+                    // Grid / List View Toggle Button
+                    IconButton(
+                        onClick = { isGridView = !isGridView },
+                        modifier = Modifier
+                            .size(38.dp)
+                            .testTag("toggle_channel_view_mode")
+                    ) {
+                        Icon(
+                            imageVector = if (isGridView) Icons.AutoMirrored.Filled.List else Icons.Default.GridView,
+                            contentDescription = if (isGridView) "Switch to List View" else "Switch to Grid View",
+                            tint = if (isGridView) Color(0xFFDC2626) else appColors.textMuted,
+                            modifier = Modifier.size(22.dp)
+                        )
                     }
 
                     if (onRefresh != null) {
@@ -196,14 +285,15 @@ fun ChannelListScreen(
                                 }
                             },
                             modifier = Modifier
-                                .size(48.dp)
-                                .padding(start = 4.dp)
+                                .size(38.dp)
+                                .padding(start = 2.dp)
                                 .testTag("channel_list_refresh_button")
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Refresh,
                                 contentDescription = "Refresh Channels",
-                                tint = OttPrimary
+                                tint = Color(0xFFDC2626),
+                                modifier = Modifier.size(24.dp)
                             )
                         }
                     }
@@ -213,15 +303,15 @@ fun ChannelListScreen(
                 if (selectedCategory != null) {
                     Spacer(modifier = Modifier.height(8.dp))
                     Surface(
-                        color = OttPrimary.copy(alpha = 0.12f),
-                        shape = RoundedCornerShape(8.dp),
-                        border = BorderStroke(1.dp, OttPrimary.copy(alpha = 0.35f)),
+                        color = if (isDark) Color(0xFF261014) else Color(0xFFFFF1F2),
+                        shape = RoundedCornerShape(10.dp),
+                        border = BorderStroke(1.dp, if (isDark) Color(0xFF4C1D24) else Color(0xFFFECDD3)),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
@@ -232,27 +322,27 @@ fun ChannelListScreen(
                                 Icon(
                                     imageVector = Icons.Default.FilterList,
                                     contentDescription = null,
-                                    tint = OttPrimary,
-                                    modifier = Modifier.size(16.dp)
+                                    tint = Color(0xFFE50914),
+                                    modifier = Modifier.size(18.dp)
                                 )
-                                Spacer(modifier = Modifier.width(6.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
                                 Text(
-                                    text = "Filtered by: ",
+                                    text = strings.filterBy,
                                     color = appColors.textSecondary,
-                                    fontSize = 12.sp
+                                    fontSize = 13.sp
                                 )
                                 Text(
                                     text = selectedCategory,
-                                    color = OttPrimary,
-                                    fontSize = 12.sp,
+                                    color = Color(0xFFDC2626),
+                                    fontSize = 13.sp,
                                     fontWeight = FontWeight.Bold,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
                                 Text(
-                                    text = " (${filteredChannels.size} channels)",
+                                    text = " (${filteredChannels.size} ${strings.channel})",
                                     color = appColors.textMuted,
-                                    fontSize = 12.sp
+                                    fontSize = 13.sp
                                 )
                             }
 
@@ -260,19 +350,19 @@ fun ChannelListScreen(
                                 verticalAlignment = Alignment.CenterVertically,
                                 modifier = Modifier
                                     .clickable { onCategorySelect(null) }
-                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                                    .padding(start = 8.dp)
                             ) {
                                 Text(
-                                    text = "Clear",
-                                    color = OttPrimary,
-                                    fontSize = 11.sp,
+                                    text = strings.clear,
+                                    color = Color(0xFFDC2626),
+                                    fontSize = 13.sp,
                                     fontWeight = FontWeight.Bold
                                 )
-                                Spacer(modifier = Modifier.width(2.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
                                 Icon(
                                     imageVector = Icons.Default.Close,
                                     contentDescription = "Clear category filter",
-                                    tint = OttPrimary,
+                                    tint = Color(0xFFDC2626),
                                     modifier = Modifier.size(14.dp)
                                 )
                             }
@@ -292,53 +382,12 @@ fun ChannelListScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(32.dp),
+                        .padding(horizontal = 16.dp, vertical = 24.dp),
                     contentAlignment = Alignment.Center
                 ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.padding(20.dp)
-                    ) {
-                        Surface(
-                            color = OttPrimary.copy(alpha = 0.12f),
-                            shape = androidx.compose.foundation.shape.CircleShape,
-                            modifier = Modifier.size(64.dp)
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = Icons.Default.TvOff,
-                                    contentDescription = null,
-                                    tint = OttPrimary,
-                                    modifier = Modifier.size(32.dp)
-                                )
-                            }
-                        }
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text(
-                            text = "No Playlist Selected",
-                            color = appColors.textPrimary,
-                            fontSize = 17.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Text(
-                            text = "Please select or add a playlist to view channels.",
-                            color = appColors.textSecondary,
-                            fontSize = 13.sp,
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                        )
-                        if (onNavigateToPlaylists != null) {
-                            Spacer(modifier = Modifier.height(16.dp))
-                            Button(
-                                onClick = onNavigateToPlaylists,
-                                colors = ButtonDefaults.buttonColors(containerColor = OttPrimary),
-                                shape = RoundedCornerShape(12.dp),
-                                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp)
-                            ) {
-                                Text("Add or Select Playlist", fontWeight = FontWeight.Bold, color = Color.White)
-                            }
-                        }
-                    }
+                    StartWatchingLiveTvCard(
+                        onAddOrSelectPlaylistClick = { onNavigateToPlaylists?.invoke() }
+                    )
                 }
             } else if (filteredChannels.isEmpty()) {
                 Box(
@@ -372,14 +421,15 @@ fun ChannelListScreen(
                     }
                 }
             } else {
+                val effectiveColumns = if (isGridView) maxOf(columns, 2) else columns
                 LazyColumn(
-                    contentPadding = PaddingValues(horizontal = horizontalListPadding, vertical = 12.dp),
+                    contentPadding = PaddingValues(horizontal = horizontalListPadding, vertical = 10.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier
                         .fillMaxSize()
                         .testTag("channel_list_column")
                 ) {
-                    if (columns == 1) {
+                    if (effectiveColumns == 1) {
                         itemsIndexed(
                             items = filteredChannels,
                             key = { index, channel -> "${channel.id}_${channel.streamUrl}_$index" }
@@ -392,7 +442,7 @@ fun ChannelListScreen(
                             )
                         }
                     } else {
-                        val chunkedChannels = filteredChannels.chunked(columns)
+                        val chunkedChannels = filteredChannels.chunked(effectiveColumns)
                         itemsIndexed(
                             items = chunkedChannels,
                             key = { index, row -> "${row.firstOrNull()?.id}_${row.firstOrNull()?.streamUrl}_$index" }
@@ -403,15 +453,24 @@ fun ChannelListScreen(
                             ) {
                                 for (channel in rowChannels) {
                                     Box(modifier = Modifier.weight(1f)) {
-                                        ChannelListItem(
-                                            channel = channel,
-                                            isPlaying = channel.streamUrl == currentPlayingChannel?.streamUrl,
-                                            onClick = { onChannelClick(channel) },
-                                            onToggleFavorite = { onToggleFavorite(channel) }
-                                        )
+                                        if (isGridView) {
+                                            ChannelGridCard(
+                                                channel = channel,
+                                                isPlaying = channel.streamUrl == currentPlayingChannel?.streamUrl,
+                                                onClick = { onChannelClick(channel) },
+                                                onToggleFavorite = { onToggleFavorite(channel) }
+                                            )
+                                        } else {
+                                            ChannelListItem(
+                                                channel = channel,
+                                                isPlaying = channel.streamUrl == currentPlayingChannel?.streamUrl,
+                                                onClick = { onChannelClick(channel) },
+                                                onToggleFavorite = { onToggleFavorite(channel) }
+                                            )
+                                        }
                                     }
                                 }
-                                val emptySlots = columns - rowChannels.size
+                                val emptySlots = effectiveColumns - rowChannels.size
                                 for (i in 0 until emptySlots) {
                                     Spacer(modifier = Modifier.weight(1f))
                                 }
@@ -420,9 +479,123 @@ fun ChannelListScreen(
                     }
 
                     item(key = "bottom_spacer") {
-                        Spacer(modifier = Modifier.height(88.dp))
+                        Spacer(modifier = Modifier.height(96.dp))
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+fun ChannelGridCard(
+    channel: Channel,
+    isPlaying: Boolean,
+    onClick: () -> Unit,
+    onToggleFavorite: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val appColors = LocalAppColors.current
+    val isDark = appColors.isDark
+
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isPlaying) {
+                if (isDark) Color(0xFF2E1218) else Color(0xFFFEF2F2)
+            } else {
+                appColors.surface
+            }
+        ),
+        border = BorderStroke(
+            1.dp,
+            if (isPlaying) Color(0xFFFECDD3) else appColors.border
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.5.dp),
+        modifier = modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .testTag("channel_grid_${channel.id}")
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            // Channel Logo in Rounded Box with Favorite button overlay
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(64.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(appColors.surfaceVariant),
+                contentAlignment = Alignment.Center
+            ) {
+                com.example.ui.components.ChannelLogo(
+                    channel = channel,
+                    fontSize = 16.sp,
+                    cornerRadius = 12.dp,
+                    imagePadding = 6.dp,
+                    modifier = Modifier.fillMaxSize()
+                )
+
+                // Heart favorite top-end
+                IconButton(
+                    onClick = onToggleFavorite,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .size(28.dp)
+                ) {
+                    Icon(
+                        imageVector = if (channel.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                        contentDescription = "Favorite",
+                        tint = if (channel.isFavorite) OttPrimary else appColors.textMuted,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Channel name
+            Text(
+                text = channel.name,
+                color = if (isPlaying) OttPrimary else appColors.textPrimary,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                // LIVE badge
+                Surface(
+                    shape = RoundedCornerShape(4.dp),
+                    color = Color(0xFFE50914)
+                ) {
+                    Text(
+                        text = "• LIVE",
+                        color = Color.White,
+                        fontSize = 8.sp,
+                        fontWeight = FontWeight.Black,
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                    )
+                }
+
+                Text(
+                    text = channel.category.ifBlank { "General" },
+                    color = appColors.textSecondary,
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
         }
     }

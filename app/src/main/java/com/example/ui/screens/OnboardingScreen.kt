@@ -12,12 +12,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -39,7 +40,7 @@ import com.example.ui.theme.OttPrimary
 data class OnboardingPage(
     val title: String,
     val description: String,
-    val imageRes: Int
+    val imageRes: Int = R.drawable.ic_launcher_logo
 )
 
 @Composable
@@ -50,122 +51,128 @@ fun OnboardingScreen(
     val pages = remember {
         listOf(
             OnboardingPage(
-                title = "Watch Live TV from Around the World",
-                description = "Stream high-definition news, sports, entertainment, and regional channels with instant playback.",
-                imageRes = R.drawable.img_banner_live_tv
+                title = "Welcome to Hypnotix IPTV",
+                description = "Stream thousands of global and Indian live TV channels with ultra-fast playback."
             ),
             OnboardingPage(
-                title = "Live Sports & Action in Full HD",
-                description = "Never miss a match. Enjoy cricket, football, racing, and athletics without buffering.",
-                imageRes = R.drawable.img_banner_sports_live
+                title = "Dual Split View & PiP",
+                description = "Watch your favorite channels in Picture-in-Picture mode or side-by-side split view."
             ),
             OnboardingPage(
-                title = "Xtream Codes & Custom M3U Playlists",
-                description = "Easily load your own provider playlists, watch movies, and navigate like a modern OTT platform.",
-                imageRes = R.drawable.img_banner_watch_online
+                title = "Custom Playlists & Xtream",
+                description = "Import custom M3U playlists or connect your Xtream Codes API account easily."
             )
         )
     }
 
-    var currentPage by remember { mutableIntStateOf(0) }
+    var currentPageIndex by remember { mutableIntStateOf(0) }
+    val page = pages[currentPageIndex]
 
-    Column(
+    Box(
         modifier = modifier
             .fillMaxSize()
-            .background(Color(0xFF0F172A))
-            .padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.SpaceBetween
+            .background(Color(0xFF0D1117))
+            .statusBarsPadding()
+            .padding(24.dp)
     ) {
-        // Skip Button
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            Button(
-                onClick = onFinishOnboarding,
-                colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent)
-            ) {
-                Text(text = "Skip", color = Color(0xFF94A3B8), fontSize = 14.sp)
-            }
-        }
-
-        // Center Artwork & Content
         Column(
+            modifier = Modifier.fillMaxSize(),
             horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.Center
+            verticalArrangement = Arrangement.SpaceBetween
         ) {
-            val page = pages[currentPage]
-
-            Box(
-                modifier = Modifier
-                    .size(260.dp, 200.dp)
-                    .clip(RoundedCornerShape(20.dp))
+            // Top Skip Button
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End
             ) {
-                Image(
-                    painter = painterResource(id = page.imageRes),
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
-                )
+                if (currentPageIndex < pages.size - 1) {
+                    TextButton(onClick = onFinishOnboarding) {
+                        Text(text = "Skip", color = Color.White.copy(alpha = 0.6f))
+                    }
+                } else {
+                    Spacer(modifier = Modifier.height(48.dp))
+                }
             }
 
-            Spacer(modifier = Modifier.height(28.dp))
-
-            Text(
-                text = page.title,
-                color = Color.White,
-                fontSize = 22.sp,
-                fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center
-            )
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            Text(
-                text = page.description,
-                color = Color(0xFF94A3B8),
-                fontSize = 14.sp,
-                textAlign = TextAlign.Center,
-                lineHeight = 20.sp,
-                modifier = Modifier.padding(horizontal = 16.dp)
-            )
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            // Indicator Dots
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                pages.indices.forEach { index ->
-                    val isSelected = index == currentPage
-                    Box(
-                        modifier = Modifier
-                            .size(if (isSelected) 24.dp else 8.dp, 8.dp)
-                            .clip(CircleShape)
-                            .background(if (isSelected) OttPrimary else Color(0xFF334155))
+            // Center Illustration & Content
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.Center
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(140.dp)
+                        .clip(RoundedCornerShape(28.dp))
+                        .background(Color(0xFF1E293B)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Image(
+                        painter = painterResource(id = R.drawable.ic_launcher_logo),
+                        contentDescription = null,
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.size(100.dp)
                     )
                 }
-            }
-        }
 
-        // Next / Get Started Button
-        Button(
-            onClick = {
-                if (currentPage < pages.size - 1) {
-                    currentPage++
-                } else {
-                    onFinishOnboarding()
+                Spacer(modifier = Modifier.height(32.dp))
+
+                Text(
+                    text = page.title,
+                    color = Color.White,
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Text(
+                    text = page.description,
+                    color = Color.White.copy(alpha = 0.7f),
+                    fontSize = 15.sp,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                )
+
+                Spacer(modifier = Modifier.height(28.dp))
+
+                // Page Indicator Dots
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    pages.indices.forEach { index ->
+                        val isCurrent = index == currentPageIndex
+                        Box(
+                            modifier = Modifier
+                                .size(if (isCurrent) 24.dp else 8.dp, 8.dp)
+                                .clip(CircleShape)
+                                .background(if (isCurrent) OttPrimary else Color.White.copy(alpha = 0.2f))
+                        )
+                    }
                 }
-            },
-            colors = ButtonDefaults.buttonColors(containerColor = OttPrimary),
-            shape = RoundedCornerShape(12.dp),
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(50.dp)
-        ) {
-            Text(
-                text = if (currentPage == pages.size - 1) "Get Started" else "Next",
-                color = Color.White,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Bold
-            )
+            }
+
+            // Bottom Action Button
+            Button(
+                onClick = {
+                    if (currentPageIndex < pages.size - 1) {
+                        currentPageIndex++
+                    } else {
+                        onFinishOnboarding()
+                    }
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = OttPrimary),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(50.dp)
+            ) {
+                Text(
+                    text = if (currentPageIndex < pages.size - 1) "Next" else "Get Started",
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp
+                )
+            }
         }
     }
 }

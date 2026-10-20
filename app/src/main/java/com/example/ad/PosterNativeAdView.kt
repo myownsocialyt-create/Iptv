@@ -1,8 +1,9 @@
 package com.example.ad
 
+import android.app.Activity
 import android.content.Context
+import android.content.ContextWrapper
 import android.util.Log
-import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
@@ -13,27 +14,38 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
-import androidx.compose.foundation.background
-import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Surface
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import com.example.ui.theme.LocalAppColors
-import com.example.ui.theme.OttLiveRed
-import com.example.ui.theme.OttPrimary
 import com.google.android.gms.ads.AdListener
 import com.google.android.gms.ads.AdLoader
 import com.google.android.gms.ads.AdRequest
@@ -45,37 +57,42 @@ import com.google.android.gms.ads.nativead.NativeAdView
 import kotlinx.coroutines.delay
 
 /**
- * Poster/Native banner ad displayed directly below or above the Search Bar in portrait mode.
- * Adapts to Dark and Light modes.
- * Includes a close [X] button. When closed, it disappears and refreshes after a cooldown.
+ * Real Google AdMob Native Ad Banner displayed above/below the search bar in Split Screen.
+ * Uses official AdMob Native Advanced Test ID: ca-app-pub-3940256099942544/2247696110
+ * Features:
+ * - Displays ONLY genuine AdMob NativeAdView with Headline, Body, Icon, MediaView, and CTA Button.
+ * - ZERO custom text or fake labels.
+ * - Cut/Close (✕) button to dismiss ad.
+ * - Manual Reload (🔄) button.
+ * - Automatic refresh every 60 seconds.
  */
 @Composable
 fun PosterNativeAdView(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val appColors = LocalAppColors.current
-    val isDark = isSystemInDarkTheme()
+    val activity = context.findActivity() ?: return
 
     var nativeAd by remember { mutableStateOf<NativeAd?>(null) }
     var isAdVisible by remember { mutableStateOf(true) }
     var refreshKey by remember { mutableIntStateOf(0) }
 
-    // Official Google AdMob Sample Native Ad Unit ID
+    // Official Google AdMob Native Advanced Test Ad Unit ID
     val testAdUnitId = "ca-app-pub-3940256099942544/2247696110"
 
-    // Load AdMob Native Ad whenever refreshKey changes
+    // Load real AdMob Native Ad using Activity context
     LaunchedEffect(refreshKey) {
         try {
-            val adLoader = AdLoader.Builder(context, testAdUnitId)
+            val adLoader = AdLoader.Builder(activity, testAdUnitId)
                 .forNativeAd { ad ->
                     nativeAd?.destroy()
                     nativeAd = ad
                     isAdVisible = true
+                    Log.d("PosterNativeAd", "AdMob Native Ad loaded successfully: ${ad.headline}")
                 }
                 .withAdListener(object : AdListener() {
                     override fun onAdFailedToLoad(error: LoadAdError) {
-                        Log.d("PosterNativeAd", "Ad load error: ${error.message}")
+                        Log.w("PosterNativeAd", "AdMob native ad failed to load (${error.code}): ${error.message}")
                     }
                 })
                 .withNativeAdOptions(
@@ -87,14 +104,14 @@ fun PosterNativeAdView(
 
             adLoader.loadAd(AdRequest.Builder().build())
         } catch (e: Exception) {
-            Log.e("PosterNativeAd", "Error loading ad", e)
+            Log.e("PosterNativeAd", "Error loading AdMob ad", e)
         }
     }
 
-    // Auto-refresh ad every 75 seconds if visible
-    LaunchedEffect(isAdVisible) {
+    // Auto-refresh ad every 60 seconds while visible
+    LaunchedEffect(isAdVisible, refreshKey) {
         if (isAdVisible) {
-            delay(75_000L)
+            delay(60_000L)
             refreshKey++
         }
     }
@@ -102,127 +119,101 @@ fun PosterNativeAdView(
     DisposableEffect(Unit) {
         onDispose {
             nativeAd?.destroy()
+            nativeAd = null
         }
     }
 
+    // Only render when the real AdMob ad is loaded and visible
     AnimatedVisibility(
-        visible = isAdVisible,
+        visible = isAdVisible && nativeAd != null,
         enter = fadeIn() + slideInVertically(),
         exit = fadeOut() + slideOutVertically(),
         modifier = modifier
     ) {
+        val currentAd = nativeAd ?: return@AnimatedVisibility
+
         Card(
-            shape = RoundedCornerShape(12.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = if (isDark) Color(0xFF1E2638) else Color(0xFFF1F5F9)
-            ),
+            shape = RoundedCornerShape(14.dp),
+            colors = CardDefaults.cardColors(containerColor = Color.White),
+            border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
             elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 12.dp, vertical = 6.dp)
+                .testTag("split_screen_native_ad_card")
         ) {
             Box(modifier = Modifier.fillMaxWidth()) {
-                if (nativeAd != null) {
-                    AndroidView(
-                        factory = { ctx ->
-                            createNativeAdView(ctx, isDark)
-                        },
-                        update = { adView ->
-                            nativeAd?.let { populateNativeAdView(it, adView, isDark) }
-                        },
+                AndroidView(
+                    factory = { ctx ->
+                        createNativeAdView(ctx)
+                    },
+                    update = { adView ->
+                        populateNativeAdView(currentAd, adView)
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(10.dp)
+                )
+
+                // Top-Right Actions: Reload/Refresh Button + Cut/Close (X) Button
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    // Reload / Refresh Icon Button
+                    Surface(
+                        shape = CircleShape,
+                        color = Color(0xFFF1F5F9),
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(10.dp)
-                    )
-                } else {
-                    // Clean placeholder / test poster preview while ad loads
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                            .size(26.dp)
+                            .clickable { refreshKey++ }
+                            .testTag("ad_reload_button")
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .size(44.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(OttPrimary.copy(alpha = 0.15f)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = "AD",
-                                color = OttPrimary,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 12.sp
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(
-                                    modifier = Modifier
-                                        .background(OttLiveRed, RoundedCornerShape(3.dp))
-                                        .padding(horizontal = 4.dp, vertical = 1.dp)
-                                ) {
-                                    Text(
-                                        text = "Ad",
-                                        color = Color.White,
-                                        fontSize = 9.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = "Google Play Sponsored Apps",
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = appColors.textPrimary
-                                )
-                            }
-                            Text(
-                                text = "Discover trending games & streaming tools",
-                                fontSize = 11.sp,
-                                color = appColors.textSecondary,
-                                maxLines = 1
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Default.Refresh,
+                                contentDescription = "Reload Ad",
+                                tint = Color(0xFF64748B),
+                                modifier = Modifier.size(15.dp)
                             )
                         }
                     }
-                }
 
-                // Close [X] Button on top-right corner
-                IconButton(
-                    onClick = {
-                        isAdVisible = false
-                        // Cooldown: reappears with fresh ad after 20 seconds
-                        (context as? android.app.Activity)?.runOnUiThread {
-                            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                                refreshKey++
-                                isAdVisible = true
-                            }, 20_000L)
+                    // Cut / Close (X) Button
+                    Surface(
+                        shape = CircleShape,
+                        color = Color(0xFFF1F5F9),
+                        modifier = Modifier
+                            .size(26.dp)
+                            .clickable {
+                                isAdVisible = false
+                                // Auto-reappear with refreshed ad after 15 seconds
+                                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                                    refreshKey++
+                                    isAdVisible = true
+                                }, 15_000L)
+                            }
+                            .testTag("ad_cut_close_button")
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Close Ad",
+                                tint = Color(0xFF64748B),
+                                modifier = Modifier.size(15.dp)
+                            )
                         }
-                    },
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(4.dp)
-                        .size(24.dp)
-                        .background(
-                            color = if (isDark) Color.Black.copy(alpha = 0.5f) else Color.White.copy(alpha = 0.8f),
-                            shape = CircleShape
-                        )
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Close,
-                        contentDescription = "Close Ad",
-                        tint = if (isDark) Color.LightGray else Color.DarkGray,
-                        modifier = Modifier.size(14.dp)
-                    )
+                    }
                 }
             }
         }
     }
 }
 
-private fun createNativeAdView(context: Context, isDark: Boolean): NativeAdView {
+private fun createNativeAdView(context: Context): NativeAdView {
     val nativeAdView = NativeAdView(context)
     val rootLayout = android.widget.LinearLayout(context).apply {
         orientation = android.widget.LinearLayout.VERTICAL
@@ -232,7 +223,7 @@ private fun createNativeAdView(context: Context, isDark: Boolean): NativeAdView 
         )
     }
 
-    // Top Row: Icon + Headline + Advertiser + CTA
+    // Top Row: Icon + Info + CTA Button
     val topRow = android.widget.LinearLayout(context).apply {
         orientation = android.widget.LinearLayout.HORIZONTAL
         gravity = android.view.Gravity.CENTER_VERTICAL
@@ -242,10 +233,10 @@ private fun createNativeAdView(context: Context, isDark: Boolean): NativeAdView 
         )
     }
 
-    // Icon
+    // App Icon from AdMob
     val iconView = ImageView(context).apply {
         id = View.generateViewId()
-        layoutParams = android.widget.LinearLayout.LayoutParams(dpToPx(context, 42), dpToPx(context, 42)).apply {
+        layoutParams = android.widget.LinearLayout.LayoutParams(dpToPx(context, 44), dpToPx(context, 44)).apply {
             setMargins(0, 0, dpToPx(context, 10), 0)
         }
         scaleType = ImageView.ScaleType.FIT_CENTER
@@ -253,7 +244,7 @@ private fun createNativeAdView(context: Context, isDark: Boolean): NativeAdView 
     nativeAdView.iconView = iconView
     topRow.addView(iconView)
 
-    // Info Column (Badge + Headline + Body)
+    // Info Column (Ad Badge + Headline + Body)
     val infoCol = android.widget.LinearLayout(context).apply {
         orientation = android.widget.LinearLayout.VERTICAL
         layoutParams = android.widget.LinearLayout.LayoutParams(
@@ -263,7 +254,6 @@ private fun createNativeAdView(context: Context, isDark: Boolean): NativeAdView 
         )
     }
 
-    // Badge Row
     val badgeRow = android.widget.LinearLayout(context).apply {
         orientation = android.widget.LinearLayout.HORIZONTAL
         gravity = android.view.Gravity.CENTER_VERTICAL
@@ -271,7 +261,7 @@ private fun createNativeAdView(context: Context, isDark: Boolean): NativeAdView 
 
     val adBadge = TextView(context).apply {
         text = "Ad"
-        textSize = 10f
+        textSize = 9f
         typeface = android.graphics.Typeface.DEFAULT_BOLD
         setTextColor(android.graphics.Color.WHITE)
         setBackgroundColor(android.graphics.Color.parseColor("#E50914"))
@@ -283,7 +273,7 @@ private fun createNativeAdView(context: Context, isDark: Boolean): NativeAdView 
         id = View.generateViewId()
         textSize = 13f
         typeface = android.graphics.Typeface.DEFAULT_BOLD
-        setTextColor(if (isDark) android.graphics.Color.WHITE else android.graphics.Color.parseColor("#0F172A"))
+        setTextColor(android.graphics.Color.parseColor("#0F172A"))
         maxLines = 1
         ellipsize = android.text.TextUtils.TruncateAt.END
         setPadding(dpToPx(context, 6), 0, 0, 0)
@@ -295,7 +285,7 @@ private fun createNativeAdView(context: Context, isDark: Boolean): NativeAdView 
     val bodyView = TextView(context).apply {
         id = View.generateViewId()
         textSize = 11f
-        setTextColor(if (isDark) android.graphics.Color.parseColor("#94A3B8") else android.graphics.Color.parseColor("#64748B"))
+        setTextColor(android.graphics.Color.parseColor("#64748B"))
         maxLines = 1
         ellipsize = android.text.TextUtils.TruncateAt.END
         setPadding(0, dpToPx(context, 2), 0, 0)
@@ -304,7 +294,7 @@ private fun createNativeAdView(context: Context, isDark: Boolean): NativeAdView 
     infoCol.addView(bodyView)
     topRow.addView(infoCol)
 
-    // CTA Button
+    // Call To Action Button from AdMob
     val ctaButton = Button(context).apply {
         id = View.generateViewId()
         textSize = 11f
@@ -316,7 +306,7 @@ private fun createNativeAdView(context: Context, isDark: Boolean): NativeAdView 
             ViewGroup.LayoutParams.WRAP_CONTENT,
             dpToPx(context, 34)
         ).apply {
-            setMargins(dpToPx(context, 6), 0, dpToPx(context, 26), 0)
+            setMargins(dpToPx(context, 6), 0, dpToPx(context, 54), 0)
         }
     }
     nativeAdView.callToActionView = ctaButton
@@ -324,7 +314,7 @@ private fun createNativeAdView(context: Context, isDark: Boolean): NativeAdView 
 
     rootLayout.addView(topRow)
 
-    // Optional Poster MediaView
+    // MediaView for video or graphic banner from AdMob
     val mediaView = MediaView(context).apply {
         id = View.generateViewId()
         layoutParams = android.widget.LinearLayout.LayoutParams(
@@ -341,7 +331,7 @@ private fun createNativeAdView(context: Context, isDark: Boolean): NativeAdView 
     return nativeAdView
 }
 
-private fun populateNativeAdView(nativeAd: NativeAd, adView: NativeAdView, isDark: Boolean) {
+private fun populateNativeAdView(nativeAd: NativeAd, adView: NativeAdView) {
     (adView.headlineView as? TextView)?.text = nativeAd.headline
 
     val bodyView = adView.bodyView as? TextView

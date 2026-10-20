@@ -68,6 +68,7 @@ fun rememberShimmerBrush(): Brush {
 fun ChannelListShimmer(
     count: Int = 8,
     statusMessage: String = "Loading Channels...",
+    showHeaderBanner: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val appColors = LocalAppColors.current

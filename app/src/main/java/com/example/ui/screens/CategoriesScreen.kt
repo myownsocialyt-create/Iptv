@@ -35,20 +35,24 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.Channel
+import com.example.ui.i18n.LocalAppStrings
 import com.example.ui.theme.LocalAppColors
+import com.example.ui.components.StartWatchingLiveTvCard
 import com.example.ui.theme.OttPrimary
 
 @Composable
 fun CategoriesScreen(
     channels: List<Channel>,
-    searchQuery: String,
-    onSearchQueryChange: (String) -> Unit,
-    hasSelectedFirstPlaylist: Boolean,
-    onNavigateToPlaylists: () -> Unit,
-    onSelectCategory: (String) -> Unit,
+    categories: List<String> = emptyList(),
+    searchQuery: String = "",
+    onSearchQueryChange: (String) -> Unit = {},
+    hasSelectedFirstPlaylist: Boolean = true,
+    onNavigateToPlaylists: () -> Unit = {},
+    onSelectCategory: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val appColors = LocalAppColors.current
+    val strings = LocalAppStrings.current
 
     val categoryCounts = remember(channels) {
         channels.groupingBy { it.category }.eachCount()
@@ -67,19 +71,31 @@ fun CategoriesScreen(
             .padding(horizontal = 14.dp, vertical = 10.dp)
     ) {
         Text(
-            text = "Categories (${categories.size})",
+            text = "${strings.categories} (${categories.size})",
             fontSize = 18.sp,
             fontWeight = FontWeight.Bold,
             color = appColors.textPrimary,
             modifier = Modifier.padding(bottom = 10.dp)
         )
 
-        LazyVerticalGrid(
-            columns = GridCells.Adaptive(minSize = 160.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-            contentPadding = PaddingValues(bottom = 80.dp)
-        ) {
+        if (!hasSelectedFirstPlaylist || channels.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 6.dp, vertical = 20.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                StartWatchingLiveTvCard(
+                    onAddOrSelectPlaylistClick = onNavigateToPlaylists
+                )
+            }
+        } else {
+            LazyVerticalGrid(
+                columns = GridCells.Adaptive(minSize = 160.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                contentPadding = PaddingValues(bottom = 80.dp)
+            ) {
             items(categories) { category ->
                 val count = categoryCounts[category] ?: 0
                 Card(
@@ -124,7 +140,7 @@ fun CategoriesScreen(
                                     color = appColors.textPrimary
                                 )
                                 Text(
-                                    text = "$count channels",
+                                    text = "$count ${strings.channel}",
                                     fontSize = 11.sp,
                                     color = appColors.textSecondary
                                 )
@@ -142,4 +158,5 @@ fun CategoriesScreen(
             }
         }
     }
+}
 }

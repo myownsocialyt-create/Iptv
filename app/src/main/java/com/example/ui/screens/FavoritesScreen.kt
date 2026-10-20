@@ -27,19 +27,24 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.Channel
 import com.example.ui.components.ChannelListItem
+import com.example.ui.i18n.LocalAppStrings
 import com.example.ui.theme.LocalAppColors
 
 @Composable
 fun FavoritesScreen(
     favorites: List<Channel>,
-    currentPlayingChannel: Channel?,
-    searchQuery: String,
-    onSearchQueryChange: (String) -> Unit,
-    onChannelClick: (Channel) -> Unit,
-    onToggleFavorite: (Channel) -> Unit,
+    currentPlayingChannel: Channel? = null,
+    searchQuery: String = "",
+    onSearchQueryChange: (String) -> Unit = {},
+    onChannelClick: (Channel) -> Unit = {},
+    onToggleFavorite: (Channel) -> Unit = {},
+    playingChannelUrl: String? = null,
+    onPlayChannel: ((Channel) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val appColors = LocalAppColors.current
+    val strings = LocalAppStrings.current
+    val handlePlay = onPlayChannel ?: onChannelClick
 
     val filteredFavorites by remember(favorites, searchQuery) {
         derivedStateOf {
@@ -66,14 +71,14 @@ fun FavoritesScreen(
                 )
                 Spacer(modifier = Modifier.height(14.dp))
                 Text(
-                    text = "No Saved Channels",
+                    text = strings.noFavoritesYet,
                     color = appColors.textPrimary,
                     fontSize = 17.sp,
                     fontWeight = FontWeight.Bold
                 )
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
-                    text = "Tap the heart icon on any channel to add it to your favorites.",
+                    text = strings.noFavoritesDesc,
                     color = appColors.textSecondary,
                     fontSize = 13.sp
                 )
@@ -89,7 +94,7 @@ fun FavoritesScreen(
     ) {
         item {
             Text(
-                text = "Favorite Channels (${filteredFavorites.size})",
+                text = "${strings.favorites} (${filteredFavorites.size})",
                 fontSize = 16.sp,
                 fontWeight = FontWeight.Bold,
                 color = appColors.textPrimary,

@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.PlayArrow
@@ -24,7 +23,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -36,7 +34,7 @@ import com.example.ui.theme.LocalAppColors
 
 /**
  * YouTube Companion Ad Card that appears directly below the video player in Portrait mode
- * while an in-stream ad is playing, matching Photo 3.
+ * while an in-stream ad is playing, exactly matching the bottom card in user reference photo (IMG_20261004_230821.jpg).
  */
 @Composable
 fun YouTubeCompanionAdCard(
@@ -46,6 +44,13 @@ fun YouTubeCompanionAdCard(
     val context = LocalContext.current
     val appColors = LocalAppColors.current
 
+    // Card background: crisp clean white matching the photo (or deep card in dark theme)
+    val cardBg = if (appColors.isDark) Color(0xFF1E1E1E) else Color.White
+    val headlineColor = if (appColors.isDark) Color.White else Color(0xFF0F0F0F)
+    val subtitleColor = if (appColors.isDark) Color(0xFFAAAAAA) else Color(0xFF606060)
+    val arrowBg = if (appColors.isDark) Color(0xFF2C2C2C) else Color(0xFFF2F2F2)
+    val arrowTint = if (appColors.isDark) Color.White else Color(0xFF0F0F0F)
+
     Surface(
         onClick = {
             try {
@@ -53,8 +58,8 @@ fun YouTubeCompanionAdCard(
                 context.startActivity(intent)
             } catch (_: Exception) {}
         },
-        color = appColors.surface,
-        border = BorderStroke(1.dp, appColors.border),
+        color = cardBg,
+        border = BorderStroke(1.dp, if (appColors.isDark) Color(0xFF2E2E2E) else Color(0xFFE5E5E5)),
         modifier = modifier
             .fillMaxWidth()
             .testTag("youtube_companion_ad_card")
@@ -62,7 +67,7 @@ fun YouTubeCompanionAdCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 10.dp),
+                .padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
@@ -70,54 +75,55 @@ fun YouTubeCompanionAdCard(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.weight(1f)
             ) {
-                // Red play icon circle
+                // Red circular icon with white play triangle (matching Photo)
                 Surface(
-                    color = Color.Red,
+                    color = Color(0xFFFF0000),
                     shape = CircleShape,
-                    modifier = Modifier.size(38.dp)
+                    modifier = Modifier.size(42.dp)
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Icon(
                             imageVector = Icons.Default.PlayArrow,
-                            contentDescription = null,
+                            contentDescription = "Ad Icon",
                             tint = Color.White,
-                            modifier = Modifier.size(22.dp)
+                            modifier = Modifier.size(24.dp)
                         )
                     }
                 }
 
-                Spacer(modifier = Modifier.width(12.dp))
+                Spacer(modifier = Modifier.width(14.dp))
 
                 Column {
                     Text(
-                        text = creative.ctaText,
-                        fontSize = 14.sp,
+                        text = creative.ctaText.ifBlank { creative.title },
+                        fontSize = 15.sp,
                         fontWeight = FontWeight.Bold,
-                        color = appColors.textPrimary,
+                        color = headlineColor,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
                         text = creative.subtitle,
                         fontSize = 12.sp,
-                        color = appColors.textSecondary,
+                        color = subtitleColor,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                 }
             }
 
+            // Circular up-arrow icon button on the right (matching Photo)
             Surface(
                 shape = CircleShape,
-                color = appColors.surfaceVariant,
-                modifier = Modifier.size(32.dp)
+                color = arrowBg,
+                modifier = Modifier.size(36.dp)
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Icon(
                         imageVector = Icons.Default.KeyboardArrowUp,
-                        contentDescription = "Open Ad",
-                        tint = appColors.textPrimary,
-                        modifier = Modifier.size(18.dp)
+                        contentDescription = "Open Ad Link",
+                        tint = arrowTint,
+                        modifier = Modifier.size(20.dp)
                     )
                 }
             }

@@ -4,8 +4,10 @@ import androidx.compose.ui.graphics.Color
 
 val OttPrimary = Color(0xFFE50914)      // Netflix/Hypnotix Red
 val OttPrimaryDark = Color(0xFFB81D24)
+val OttSecondary = Color(0xFF0284C7)    // Cyan/Blue secondary accent
 val OttAccent = Color(0xFFE50914)
 val OttGold = Color(0xFFFFB800)
+val OttGreen = Color(0xFF10B981)       // Live status indicator green
 val OttLiveRed = Color(0xFFFF2222)
 
 // Slate Neutrals

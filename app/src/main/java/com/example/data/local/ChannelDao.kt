@@ -26,6 +26,9 @@ interface ChannelDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertRecent(recent: RecentChannelEntity)
 
+    @Query("DELETE FROM recent_channels")
+    suspend fun clearRecents()
+
     @Query("SELECT * FROM custom_playlists ORDER BY createdAt DESC")
     fun getAllCustomPlaylists(): Flow<List<CustomPlaylistEntity>>
 

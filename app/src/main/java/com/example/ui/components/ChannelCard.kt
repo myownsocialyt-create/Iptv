@@ -67,32 +67,22 @@ fun ChannelCard(
             .testTag("channel_card_${channel.id}")
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
-            // Artwork / Logo
-            if (!channel.logoUrl.isNullOrBlank()) {
-                AsyncImage(
-                    model = channel.logoUrl,
-                    contentDescription = channel.name,
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(110.dp)
-                        .padding(12.dp)
+            // Artwork / Logo with instant monogram fallback
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(110.dp)
+                    .background(Color(0xFF0F172A)),
+                contentAlignment = Alignment.Center
+            ) {
+                ChannelLogo(
+                    channel = channel,
+                    fontSize = 18.sp,
+                    showCategoryIcon = true,
+                    cornerRadius = 0.dp,
+                    imagePadding = 12.dp,
+                    modifier = Modifier.fillMaxSize()
                 )
-            } else {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(110.dp)
-                        .background(Color(0xFF0F172A)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    androidx.compose.foundation.Image(
-                        painter = painterResource(id = R.drawable.ic_iptv_logo),
-                        contentDescription = null,
-                        contentScale = ContentScale.Fit,
-                        modifier = Modifier.size(36.dp)
-                    )
-                }
             }
 
             // Top Badges (Live/Movie + Favorite)
@@ -129,7 +119,7 @@ fun ChannelCard(
                         Icon(
                             imageVector = if (channel.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
                             contentDescription = null,
-                            tint = if (channel.isFavorite) Color.Red else Color.White,
+                            tint = if (channel.isFavorite) Color(0xFFEAB308) else Color.White,
                             modifier = Modifier.size(14.dp)
                         )
                     }

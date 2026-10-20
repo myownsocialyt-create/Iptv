@@ -35,5 +35,7 @@ abstract class IptvDatabase : RoomDatabase() {
                 instance
             }
         }
+
+        fun getDatabase(context: Context): IptvDatabase = getInstance(context)
     }
 }

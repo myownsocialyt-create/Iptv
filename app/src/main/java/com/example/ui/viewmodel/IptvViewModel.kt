@@ -2,6 +2,7 @@ package com.example.ui.viewmodel
 
 import android.app.Application
 import android.content.Context
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.local.CustomPlaylistEntity
@@ -61,7 +62,19 @@ data class IptvUiState(
     val autoReconnectEnabled: Boolean = true,
     val hasSelectedFirstPlaylist: Boolean = true,
     val deletedPresetIds: Set<String> = emptySet()
-)
+) {
+    val filteredChannels: List<Channel>
+        get() {
+            val base = if (selectedCategory == null || selectedCategory == "All") channels else channels.filter { it.category.equals(selectedCategory, ignoreCase = true) }
+            return if (searchQuery.isBlank()) base else base.filter {
+                it.name.contains(searchQuery.trim(), ignoreCase = true) ||
+                        it.category.contains(searchQuery.trim(), ignoreCase = true)
+            }
+        }
+
+    val activePlaylistSource: PlaylistSource
+        get() = selectedPlaylist
+}
 
 class IptvViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = PlaylistRepository.getInstance(application)
@@ -85,14 +98,17 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
     val autoReconnectEnabled: StateFlow<Boolean> = _autoReconnectEnabled.asStateFlow()
 
     private val _hasSelectedFirstPlaylist = MutableStateFlow(
-        prefs.getBoolean("has_selected_first_playlist", true)
+        prefs.getBoolean("has_selected_first_playlist", false)
     )
     val hasSelectedFirstPlaylist: StateFlow<Boolean> = _hasSelectedFirstPlaylist.asStateFlow()
 
     private val _hasAcceptedMediaDisclaimer = MutableStateFlow(
-        prefs.getBoolean("has_accepted_media_disclaimer", true)
+        prefs.getBoolean("has_accepted_media_disclaimer", false)
     )
     val hasAcceptedMediaDisclaimer: StateFlow<Boolean> = _hasAcceptedMediaDisclaimer.asStateFlow()
+
+    private val _showMediaDisclaimerDialog = MutableStateFlow(false)
+    val showMediaDisclaimerDialog: StateFlow<Boolean> = _showMediaDisclaimerDialog.asStateFlow()
 
     private val _pendingPlayChannel = MutableStateFlow<Channel?>(null)
     val pendingPlayChannel: StateFlow<Channel?> = _pendingPlayChannel.asStateFlow()
@@ -130,6 +146,9 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _isSplitViewMode = MutableStateFlow(false)
     val isSplitViewMode: StateFlow<Boolean> = _isSplitViewMode.asStateFlow()
+
+    private val _isXtreamPlaybackMode = MutableStateFlow(false)
+    val isXtreamPlaybackMode: StateFlow<Boolean> = _isXtreamPlaybackMode.asStateFlow()
 
     private val _addPlaylistTab = MutableStateFlow(0)
     val addPlaylistTab: StateFlow<Int> = _addPlaylistTab.asStateFlow()
@@ -243,7 +262,7 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
 
     val uiState: StateFlow<IptvUiState> = combine(
         combine(_currentSection, _selectedPlaylist, _channelSelectedPlaylist, _activeChannel) { sec, pl, cpl, act -> listOf(sec, pl, cpl, act) },
-        combine(_isFullscreen, _isSplitViewMode, _currentLanguage, _currentThemeMode) { f, s, l, t -> listOf(f, s, l, t) },
+        combine(_isFullscreen, _isSplitViewMode, _currentLanguage, _currentThemeMode, _autoReconnectEnabled) { f, s, l, t, rec -> listOf(f, s, l, t, rec) },
         combine(_isPlaylistLoading, _playlistStatusMessage, _selectedCategory, _searchQuery) { l, m, c, q -> listOf(l, m, c, q) },
         combine(playlistChannels, channelScreenChannels, allSearchableChannels, favorites) { pCh, cCh, aCh, fav -> listOf(pCh, cCh, aCh, fav) },
         combine(customPlaylists, _deletedPresetIds, _hasSelectedFirstPlaylist) { cp, del, hasSel -> listOf(cp, del, hasSel) }
@@ -257,6 +276,7 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
         val s = p2[1] as Boolean
         val l = p2[2] as AppLanguage
         val t = p2[3] as AppThemeMode
+        val rec = p2[4] as Boolean
 
         val loading = p3[0] as Boolean
         val msg = p3[1] as String?
@@ -272,28 +292,39 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
         @Suppress("UNCHECKED_CAST")
         val fav = p4[3] as List<Channel>
 
+        val favUrls = fav.map { it.streamUrl }.toSet()
+        val favIds = fav.map { it.id }.toSet()
+        val favNames = fav.map { it.name.trim().lowercase() }.toSet()
+        fun isChannelFav(ch: Channel): Boolean =
+            favUrls.contains(ch.streamUrl) || favIds.contains(ch.id) || favNames.contains(ch.name.trim().lowercase())
+
+        val pChWithFav = pCh.filter { !it.isXtreamChannel && !it.isMovieOrVod }.map { it.copy(isFavorite = isChannelFav(it)) }
+        val cChWithFav = cCh.filter { !it.isXtreamChannel && !it.isMovieOrVod }.map { it.copy(isFavorite = isChannelFav(it)) }
+        val aChWithFav = aCh.filter { !it.isXtreamChannel && !it.isMovieOrVod }.map { it.copy(isFavorite = isChannelFav(it)) }
+        val actWithFav = act?.let { it.copy(isFavorite = isChannelFav(it)) }
+
         @Suppress("UNCHECKED_CAST")
         val cp = p5[0] as List<CustomPlaylistEntity>
         @Suppress("UNCHECKED_CAST")
         val del = p5[1] as Set<String>
         val hasSel = p5[2] as Boolean
 
-        val cats = pCh.map { it.category }.distinct().sorted()
-        val cCats = cCh.map { it.category }.distinct().sorted()
+        val cats = pChWithFav.map { it.category }.distinct().sorted()
+        val cCats = cChWithFav.map { it.category }.distinct().sorted()
 
         IptvUiState(
             currentSection = sec,
             selectedPlaylist = pl,
             channelSelectedPlaylist = cpl,
             customPlaylists = cp,
-            channels = if (hasSel) pCh else emptyList(),
-            channelChannels = if (hasSel) cCh else emptyList(),
-            allChannels = if (hasSel) aCh else emptyList(),
+            channels = if (hasSel) pChWithFav else emptyList(),
+            channelChannels = if (hasSel) cChWithFav else emptyList(),
+            allChannels = if (hasSel) aChWithFav else emptyList(),
             categories = if (hasSel) cats else emptyList(),
             channelCategories = if (hasSel) cCats else emptyList(),
             selectedCategory = cat,
             searchQuery = query,
-            activeChannel = act,
+            activeChannel = actWithFav,
             isFullscreen = f,
             isSplitViewMode = s,
             isLoading = loading,
@@ -302,13 +333,34 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
             currentThemeMode = t,
             hasAcceptedMediaDisclaimer = _hasAcceptedMediaDisclaimer.value,
             pendingPlayChannel = _pendingPlayChannel.value,
-            autoReconnectEnabled = _autoReconnectEnabled.value,
+            autoReconnectEnabled = rec,
             hasSelectedFirstPlaylist = hasSel,
             deletedPresetIds = del
         )
     }.stateIn(viewModelScope, SharingStarted.Eagerly, IptvUiState())
 
     init {
+        // Initialize playerManager auto-reconnect and data-saver with saved preferences
+        playerManager.setAutoReconnectEnabled(_autoReconnectEnabled.value)
+        playerManager.setDataSaverMode(prefs.getBoolean("data_saver_enabled", false))
+        applyAppLocale(_currentLanguage.value)
+
+        viewModelScope.launch {
+            repository.loadChannels(PresetPlaylists.INDIA).collect { list ->
+                if (list.isNotEmpty()) {
+                    _indiaChannels.value = list
+                }
+            }
+        }
+
+        viewModelScope.launch {
+            repository.loadChannels(PresetPlaylists.GLOBAL).collect { list ->
+                if (list.isNotEmpty()) {
+                    _globalChannels.value = list
+                }
+            }
+        }
+
         viewModelScope.launch {
             activeXtreamAccount.collect { account ->
                 if (account != null) {
@@ -322,17 +374,25 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun loadSavedPlaylist(): PlaylistSource {
-        val id = prefs.getString("selected_playlist_id", PresetPlaylists.ALL.id) ?: PresetPlaylists.ALL.id
-        val title = prefs.getString("selected_playlist_title", PresetPlaylists.ALL.title) ?: PresetPlaylists.ALL.title
-        val url = prefs.getString("selected_playlist_url", PresetPlaylists.ALL.url) ?: PresetPlaylists.ALL.url
+        val hasSelected = prefs.getBoolean("has_selected_first_playlist", false)
+        if (!hasSelected) {
+            return PlaylistSource(id = "none", title = "No Playlist", url = "", isPreset = false)
+        }
+        val id = prefs.getString("selected_playlist_id", PresetPlaylists.INDIA.id) ?: PresetPlaylists.INDIA.id
+        val title = prefs.getString("selected_playlist_title", PresetPlaylists.INDIA.title) ?: PresetPlaylists.INDIA.title
+        val url = prefs.getString("selected_playlist_url", PresetPlaylists.INDIA.url) ?: PresetPlaylists.INDIA.url
         val isPreset = prefs.getBoolean("selected_playlist_is_preset", true)
         return PlaylistSource(id = id, title = title, url = url, isPreset = isPreset)
     }
 
     private fun loadSavedChannelPlaylist(): PlaylistSource {
-        val id = prefs.getString("channel_selected_playlist_id", PresetPlaylists.ALL.id) ?: PresetPlaylists.ALL.id
-        val title = prefs.getString("channel_selected_playlist_title", PresetPlaylists.ALL.title) ?: PresetPlaylists.ALL.title
-        val url = prefs.getString("channel_selected_playlist_url", PresetPlaylists.ALL.url) ?: PresetPlaylists.ALL.url
+        val hasSelected = prefs.getBoolean("has_selected_first_playlist", false)
+        if (!hasSelected) {
+            return PlaylistSource(id = "none", title = "No Playlist", url = "", isPreset = false)
+        }
+        val id = prefs.getString("channel_selected_playlist_id", PresetPlaylists.INDIA.id) ?: PresetPlaylists.INDIA.id
+        val title = prefs.getString("channel_selected_playlist_title", PresetPlaylists.INDIA.title) ?: PresetPlaylists.INDIA.title
+        val url = prefs.getString("channel_selected_playlist_url", PresetPlaylists.INDIA.url) ?: PresetPlaylists.INDIA.url
         val isPreset = prefs.getBoolean("channel_selected_playlist_is_preset", true)
         return PlaylistSource(id = id, title = title, url = url, isPreset = isPreset)
     }
@@ -344,12 +404,16 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun selectPlaylist(source: PlaylistSource) {
+        _hasSelectedFirstPlaylist.value = true
+        prefs.edit().putBoolean("has_selected_first_playlist", true).apply()
         selectHomePlaylist(source)
         selectChannelPlaylist(source)
     }
 
     fun selectHomePlaylist(source: PlaylistSource) {
+        _hasSelectedFirstPlaylist.value = true
         prefs.edit()
+            .putBoolean("has_selected_first_playlist", true)
             .putString("selected_playlist_id", source.id)
             .putString("selected_playlist_title", source.title)
             .putString("selected_playlist_url", source.url)
@@ -360,7 +424,9 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun selectChannelPlaylist(source: PlaylistSource) {
+        _hasSelectedFirstPlaylist.value = true
         prefs.edit()
+            .putBoolean("has_selected_first_playlist", true)
             .putString("channel_selected_playlist_id", source.id)
             .putString("channel_selected_playlist_title", source.title)
             .putString("channel_selected_playlist_url", source.url)
@@ -377,9 +443,24 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
         prefs.edit().putStringSet("deleted_preset_ids", set).apply()
     }
 
-    fun playChannel(channel: Channel) {
+    fun playXtreamChannel(channel: Channel) {
+        playChannel(channel, forceXtreamMode = true)
+    }
+
+    fun playChannel(channel: Channel, forceXtreamMode: Boolean? = null) {
+        val isXtream = forceXtreamMode ?: channel.isXtreamChannel
+        _isXtreamPlaybackMode.value = isXtream
+
         val isFav = favorites.value.any { it.streamUrl == channel.streamUrl } || channel.isFavorite
         val channelWithFav = channel.copy(isFavorite = isFav)
+
+        // Show Disclaimer & Privacy Policy pop-up only on first-time play
+        if (!_hasAcceptedMediaDisclaimer.value) {
+            _pendingPlayChannel.value = channelWithFav
+            _showMediaDisclaimerDialog.value = true
+            return
+        }
+
         _activeChannel.value = channelWithFav
         _isSplitViewMode.value = true
         playerManager.playChannel(channelWithFav)
@@ -388,9 +469,42 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun acceptMediaDisclaimer() {
+        _hasAcceptedMediaDisclaimer.value = true
+        prefs.edit().putBoolean("has_accepted_media_disclaimer", true).apply()
+        com.example.data.local.OnboardingPreferences(getApplication()).hasAcceptedMediaNotice = true
+        _showMediaDisclaimerDialog.value = false
+        val pending = _pendingPlayChannel.value
+        val wasXtream = _isXtreamPlaybackMode.value
+        _pendingPlayChannel.value = null
+        if (pending != null) {
+            playChannel(pending, forceXtreamMode = wasXtream)
+        }
+    }
+
+    fun dismissMediaDisclaimer() {
+        _pendingPlayChannel.value = null
+        _showMediaDisclaimerDialog.value = false
+    }
+
+    fun openDisclaimerDialog() {
+        _showMediaDisclaimerDialog.value = true
+    }
+
     fun toggleFavorite(channel: Channel) {
+        // Immediate optimistic UI update for active channel
+        _activeChannel.value?.let { current ->
+            if (current.streamUrl == channel.streamUrl || current.id == channel.id || current.name.equals(channel.name, ignoreCase = true)) {
+                _activeChannel.value = current.copy(isFavorite = !current.isFavorite)
+            }
+        }
         viewModelScope.launch {
-            repository.toggleFavorite(channel)
+            val isNowFav = repository.toggleFavorite(channel)
+            _activeChannel.value?.let { current ->
+                if (current.streamUrl == channel.streamUrl || current.id == channel.id || current.name.equals(channel.name, ignoreCase = true)) {
+                    _activeChannel.value = current.copy(isFavorite = isNowFav)
+                }
+            }
         }
     }
 
@@ -402,12 +516,38 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
         _selectedCategory.value = category
     }
 
+    fun selectCategory(category: String?) {
+        setSelectedCategory(if (category == "All") null else category)
+    }
+
+    fun onSearchQueryChanged(query: String) {
+        setSearchQuery(query)
+    }
+
     fun toggleFullscreen() {
         _isFullscreen.value = !_isFullscreen.value
     }
 
+    fun setFullscreen(enabled: Boolean) {
+        _isFullscreen.value = enabled
+    }
+
     fun setSplitView(enabled: Boolean) {
         _isSplitViewMode.value = enabled
+    }
+
+    fun minimizeToMiniPlayer() {
+        _isFullscreen.value = false
+        _isSplitViewMode.value = false
+        com.example.ad.InStreamAdManager.suppressAdsTemporarily(3000L)
+    }
+
+    fun restoreFromMiniPlayer() {
+        if (_activeChannel.value != null) {
+            _isFullscreen.value = false
+            _isSplitViewMode.value = true
+            com.example.ad.InStreamAdManager.suppressAdsTemporarily(3000L)
+        }
     }
 
     fun closePlayer() {
@@ -415,6 +555,8 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
         _activeChannel.value = null
         _isFullscreen.value = false
         _isSplitViewMode.value = false
+        _isXtreamPlaybackMode.value = false
+        com.example.ad.InStreamAdManager.onPlayerClosed()
     }
 
     fun openAddPlaylist(tab: Int = 0) {
@@ -425,6 +567,28 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
     fun setLanguage(language: AppLanguage) {
         _currentLanguage.value = language
         prefs.edit().putString("app_language_code", language.code).apply()
+        applyAppLocale(language)
+    }
+
+    private fun applyAppLocale(language: AppLanguage) {
+        try {
+            val locale = java.util.Locale(language.code)
+            java.util.Locale.setDefault(locale)
+            val config = getApplication<Application>().resources.configuration
+            config.setLocale(locale)
+            @Suppress("DEPRECATION")
+            getApplication<Application>().resources.updateConfiguration(
+                config,
+                getApplication<Application>().resources.displayMetrics
+            )
+        } catch (e: Exception) {
+            Log.e("IptvViewModel", "Error applying locale: ${e.message}")
+        }
+    }
+
+    fun completeFirstTimeSetup() {
+        _isFirstTimeLaunch.value = false
+        prefs.edit().putBoolean("has_completed_language_setup", true).apply()
     }
 
     fun setThemeMode(themeMode: AppThemeMode) {
@@ -436,6 +600,20 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
         _autoReconnectEnabled.value = enabled
         prefs.edit().putBoolean("auto_reconnect_enabled", enabled).apply()
         playerManager.setAutoReconnectEnabled(enabled)
+    }
+
+    fun loadPlaylist(source: PlaylistSource) {
+        selectPlaylist(source)
+    }
+
+    fun addCustomPlaylist(entity: CustomPlaylistEntity) {
+        addAndSelectCustomPlaylist(entity.title, entity.url)
+    }
+
+    fun clearRecents() {
+        viewModelScope.launch {
+            repository.clearRecents()
+        }
     }
 
     fun addAndSelectCustomPlaylist(title: String, url: String) {
@@ -475,6 +653,15 @@ class IptvViewModel(application: Application) : AndroidViewModel(application) {
             _xtreamChannels.value = live
             _xtreamVodChannels.value = vod
             _isXtreamLoading.value = false
+
+            // If user switched Xtream account while inside Xtream player, update active stream to new account's stream if needed
+            if (_isXtreamPlaybackMode.value && _isSplitViewMode.value) {
+                val combined = vod + live
+                val currentActive = _activeChannel.value
+                if (combined.isNotEmpty() && (currentActive == null || combined.none { it.streamUrl == currentActive.streamUrl && it.name == currentActive.name })) {
+                    playXtreamChannel(combined.first())
+                }
+            }
         }
     }
 

@@ -1,12 +1,21 @@
 package com.example.ad
 
+import android.app.Activity
 import android.content.Context
+import android.content.ContextWrapper
+import android.os.Build
 import android.util.Log
+import com.google.android.gms.ads.AdError
 import com.google.android.gms.ads.AdListener
 import com.google.android.gms.ads.AdLoader
 import com.google.android.gms.ads.AdRequest
+import com.google.android.gms.ads.FullScreenContentCallback
 import com.google.android.gms.ads.LoadAdError
+import com.google.android.gms.ads.VideoOptions
+import com.google.android.gms.ads.interstitial.InterstitialAd
+import com.google.android.gms.ads.interstitial.InterstitialAdLoadCallback
 import com.google.android.gms.ads.nativead.NativeAd
+import com.google.android.gms.ads.nativead.NativeAdOptions
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -17,28 +26,35 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlin.random.Random
 
+fun Context.findActivity(): Activity? {
+    var current: Context? = this
+    while (current is ContextWrapper) {
+        if (current is Activity) return current
+        current = current.baseContext
+    }
+    return null
+}
+
 /**
- * Creative information for YouTube-style in-stream video ads.
+ * Creative details for in-stream ads.
  */
 data class InStreamAdCreative(
-    val id: String,
-    val title: String,
-    val subtitle: String,
-    val advertiserName: String,
-    val ctaText: String,
-    val targetUrl: String,
-    val iconEmoji: String = "▶️",
-    val accentColorHex: String = "#FF0000"
+    val id: String = "admob_real",
+    val title: String = "",
+    val subtitle: String = "",
+    val advertiserName: String = "",
+    val ctaText: String = "Open",
+    val targetUrl: String = ""
 )
 
 /**
- * Live state of an in-stream ad currently playing over the video.
+ * Live state of in-stream ad overlay.
  */
 data class InStreamAdState(
     val isAdActive: Boolean = false,
     val creative: InStreamAdCreative? = null,
-    val totalDurationSeconds: Int = 22,
-    val remainingSeconds: Int = 22,
+    val totalDurationSeconds: Int = 16,
+    val remainingSeconds: Int = 16,
     val skipCountdownSeconds: Int = 5,
     val canSkip: Boolean = false
 ) {
@@ -49,268 +65,334 @@ data class InStreamAdState(
 }
 
 /**
- * InStreamAdManager coordinates YouTube-style video ads:
- * - Triggers randomly on channel start (pre-roll, ~50% chance)
- * - Triggers randomly during playback:
- *     - Short intervals: 25-45s (e.g. 2 ads in ~1 minute)
- *     - Medium intervals: 60-120s (~1-2 min)
- *     - Long intervals: 240-330s (~4-5 min)
- * - Emits real-time state for skip countdown ("Skip in 5s" -> "Skip ad ▶|")
- * - Drives the signature yellow progress bar along the bottom of the video player
- * - Preloads official Google AdMob test Native Ads (ca-app-pub-3940256099942544/2247696110)
+ * InStreamAdManager coordinates 100% REAL Google AdMob Ads for video playback:
+ * 1. AdMob Interstitial Video Ads (ca-app-pub-3940256099942544/1033173712) for authentic full-screen Google test video ads.
+ * 2. AdMob Native Video Ads (ca-app-pub-3940256099942544/2247696110) with MediaView for in-player native ad playback.
+ * 3. Zero fake canvas doodles, zero fake static posters, zero "Loading test id" text.
  */
 object InStreamAdManager {
     private const val TAG = "InStreamAdManager"
 
-    // Official Google AdMob Test Ad Unit IDs
-    const val TEST_BANNER_AD_UNIT_ID = "ca-app-pub-3940256099942544/6300978111"
-    const val TEST_NATIVE_AD_UNIT_ID = "ca-app-pub-3940256099942544/2247696110"
+    // Official Google AdMob Interstitial Video Test Ad Unit ID
     const val TEST_INTERSTITIAL_AD_UNIT_ID = "ca-app-pub-3940256099942544/1033173712"
+
+    // Official Google AdMob Native Advanced Test Ad Unit ID
+    const val TEST_NATIVE_AD_UNIT_ID = "ca-app-pub-3940256099942544/2247696110"
 
     private val scope = CoroutineScope(Dispatchers.Main + Job())
 
     private val _adState = MutableStateFlow(InStreamAdState())
     val adState: StateFlow<InStreamAdState> = _adState.asStateFlow()
 
-    // Default YouTube Survey Creative modeled after Photos 1 & 2
-    val YOUTUBE_SURVEY_CREATIVE = InStreamAdCreative(
-        id = "yt_survey_1",
-        title = "Help YouTube by answering one question",
-        subtitle = "YouTube advertiser survey",
-        advertiserName = "Google & YouTube",
-        ctaText = "Answer one question",
-        targetUrl = "https://www.google.com/ads",
-        iconEmoji = "▶️",
-        accentColorHex = "#FF0000"
-    )
+    // Real NativeAd instance rendered via MediaView in the in-stream overlay
+    var activeNativeAd: NativeAd? = null
+    private val _activeNativeAdFlow = MutableStateFlow<NativeAd?>(null)
+    val activeNativeAdFlow: StateFlow<NativeAd?> = _activeNativeAdFlow.asStateFlow()
 
-    // Sample Ad Creatives modeled after YouTube Ads
-    val SAMPLE_CREATIVES = listOf(
-        YOUTUBE_SURVEY_CREATIVE,
-        InStreamAdCreative(
-            id = "gcloud_1",
-            title = "Build & Deploy with Google Cloud",
-            subtitle = "Get $300 in free credits for new cloud projects",
-            advertiserName = "Google Cloud",
-            ctaText = "Start Free Trial",
-            targetUrl = "https://cloud.google.com",
-            iconEmoji = "☁️",
-            accentColorHex = "#4285F4"
-        ),
-        InStreamAdCreative(
-            id = "android_dev_1",
-            title = "Create Beautiful Modern Apps with Compose",
-            subtitle = "Android Jetpack - Faster development, native performance",
-            advertiserName = "Android Developers",
-            ctaText = "Learn Compose",
-            targetUrl = "https://developer.android.com",
-            iconEmoji = "🤖",
-            accentColorHex = "#3DDC84"
-        ),
-        InStreamAdCreative(
-            id = "hypnotix_pro_1",
-            title = "Hypnotix Ultra HD Live Player",
-            subtitle = "Ad-free experience, multi-screen streaming and cloud favorites",
-            advertiserName = "Hypnotix Media",
-            ctaText = "Upgrade to Pro",
-            targetUrl = "https://github.com",
-            iconEmoji = "⚡",
-            accentColorHex = "#E50914"
-        ),
-        InStreamAdCreative(
-            id = "yt_premium_1",
-            title = "YouTube Premium • Ad-free & Background Play",
-            subtitle = "Download videos and listen with screen off",
-            advertiserName = "YouTube",
-            ctaText = "Try 1 Month Free",
-            targetUrl = "https://youtube.com/premium",
-            iconEmoji = "🎬",
-            accentColorHex = "#FF0033"
-        )
-    )
+    private var preloadedInterstitialAd: InterstitialAd? = null
+    private var isInterstitialLoading = false
+
+    private var preloadedNativeAd: NativeAd? = null
+    private var isNativeLoading = false
 
     private var countdownJob: Job? = null
-    private var randomAdScheduleJob: Job? = null
-    private var channelStartJob: Job? = null
+    private var midrollScheduleJob: Job? = null
     private var lastAdDismissedTime = 0L
-    private var isPlayerActive = false
-    private var currentChannelUrl: String? = null
-    private var appContext: Context? = null
 
-    private var adMobCreative: InStreamAdCreative? = null
-    private var isAdMobLoading = false
+    private var onAdStartedCallback: (() -> Unit)? = null
+    private var onAdEndedCallback: (() -> Unit)? = null
+
+    // Channel switch counting: triggers reliably after 2 to 3 channel switches with cooldown
+    private var channelSwitchCount = 0
+    private var switchesUntilNextAd = 2
+    private var hasPlayedFirstChannel = false
+    private var currentPlayingStreamUrl: String? = null
+    private var suppressedUntilTime = 0L
+    private const val MIN_CHANNEL_SWITCH_AD_COOLDOWN_MS = 60_000L
 
     /**
-     * Preloads an AdMob Native Ad using the official Google AdMob test native ad unit ID.
+     * Temporarily suppresses ads for layout, orientation, or PiP transitions.
+     */
+    fun suppressAdsTemporarily(durationMs: Long = 3000L) {
+        suppressedUntilTime = System.currentTimeMillis() + durationMs
+        Log.d(TAG, "Ads temporarily suppressed for ${durationMs}ms (orientation / PiP transition)")
+    }
+
+    /**
+     * Checks if the activity is currently in Picture-in-Picture mode.
+     */
+    fun isPipActive(activity: Activity?): Boolean {
+        if (activity == null) return false
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            activity.isInPictureInPictureMode
+        } else {
+            false
+        }
+    }
+
+    /**
+     * Preloads real AdMob ads in the background.
      */
     fun preloadAdMobNativeAd(context: Context) {
-        appContext = context.applicationContext
-        if (isAdMobLoading) return
-        isAdMobLoading = true
+        preloadInterstitial(context)
+        preloadNative(context)
+    }
+
+    private fun preloadInterstitial(context: Context) {
+        if (preloadedInterstitialAd != null || isInterstitialLoading) return
+        val activity = context.findActivity() ?: return
+        isInterstitialLoading = true
 
         try {
-            val adLoader = AdLoader.Builder(context.applicationContext, TEST_NATIVE_AD_UNIT_ID)
-                .forNativeAd { nativeAd: NativeAd ->
-                    isAdMobLoading = false
-                    val headline = nativeAd.headline?.takeIf { it.isNotBlank() }
-                        ?: YOUTUBE_SURVEY_CREATIVE.title
-                    val body = nativeAd.body?.takeIf { it.isNotBlank() }
-                        ?: YOUTUBE_SURVEY_CREATIVE.subtitle
-                    val cta = nativeAd.callToAction?.takeIf { it.isNotBlank() }
-                        ?: YOUTUBE_SURVEY_CREATIVE.ctaText
-                    val advertiser = nativeAd.advertiser?.takeIf { it.isNotBlank() }
-                        ?: YOUTUBE_SURVEY_CREATIVE.advertiserName
+            val adRequest = AdRequest.Builder().build()
+            InterstitialAd.load(
+                activity,
+                TEST_INTERSTITIAL_AD_UNIT_ID,
+                adRequest,
+                object : InterstitialAdLoadCallback() {
+                    override fun onAdLoaded(ad: InterstitialAd) {
+                        isInterstitialLoading = false
+                        preloadedInterstitialAd = ad
+                        Log.d(TAG, "AdMob Real Interstitial Video Ad preloaded successfully")
+                    }
 
-                    adMobCreative = InStreamAdCreative(
-                        id = "admob_native_${System.currentTimeMillis()}",
-                        title = headline,
-                        subtitle = body,
-                        advertiserName = advertiser,
-                        ctaText = cta,
-                        targetUrl = "https://www.google.com/ads",
-                        iconEmoji = "▶️",
-                        accentColorHex = "#FF0000"
-                    )
-                    Log.d(TAG, "AdMob Native Test Ad loaded: $headline")
+                    override fun onAdFailedToLoad(error: LoadAdError) {
+                        isInterstitialLoading = false
+                        preloadedInterstitialAd = null
+                        Log.w(TAG, "AdMob Interstitial failed to load (${error.code}): ${error.message}")
+                    }
+                }
+            )
+        } catch (e: Exception) {
+            isInterstitialLoading = false
+            Log.e(TAG, "Error preloading interstitial ad", e)
+        }
+    }
+
+    private fun preloadNative(context: Context) {
+        if (preloadedNativeAd != null || isNativeLoading) return
+        val activity = context.findActivity() ?: return
+        isNativeLoading = true
+
+        try {
+            val videoOptions = VideoOptions.Builder()
+                .setStartMuted(false)
+                .build()
+
+            val adOptions = NativeAdOptions.Builder()
+                .setVideoOptions(videoOptions)
+                .setMediaAspectRatio(NativeAdOptions.NATIVE_MEDIA_ASPECT_RATIO_LANDSCAPE)
+                .setAdChoicesPlacement(NativeAdOptions.ADCHOICES_TOP_RIGHT)
+                .build()
+
+            val adLoader = AdLoader.Builder(activity, TEST_NATIVE_AD_UNIT_ID)
+                .forNativeAd { nativeAd ->
+                    isNativeLoading = false
+                    preloadedNativeAd = nativeAd
+                    Log.d(TAG, "AdMob Real Native Video Ad preloaded successfully: ${nativeAd.headline}")
                 }
                 .withAdListener(object : AdListener() {
                     override fun onAdFailedToLoad(error: LoadAdError) {
-                        isAdMobLoading = false
-                        Log.w(TAG, "AdMob Native Ad failed to load (${error.code}): ${error.message}")
+                        isNativeLoading = false
+                        preloadedNativeAd = null
+                        Log.w(TAG, "AdMob Native failed to load (${error.code}): ${error.message}")
                     }
                 })
+                .withNativeAdOptions(adOptions)
                 .build()
 
             adLoader.loadAd(AdRequest.Builder().build())
         } catch (e: Exception) {
-            isAdMobLoading = false
-            Log.w(TAG, "Exception while loading AdMob Native Ad", e)
+            isNativeLoading = false
+            Log.e(TAG, "Error preloading native ad", e)
         }
     }
 
     /**
-     * Called when channel playback is initiated.
-     * "kbhi channel start hote he aa jaye":
-     * ~50% chance to show a preroll ad immediately after a brief buffer.
+     * Called whenever a channel is played or switched.
+     * Checks stream URL to prevent spurious ad triggers on orientation or PiP changes.
      */
-    fun onChannelStarted(channelStreamUrl: String, context: Context? = null) {
-        if (context != null) {
-            appContext = context.applicationContext
-            preloadAdMobNativeAd(context)
-        }
+    fun onChannelSwitched(
+        context: Context,
+        streamUrl: String = "",
+        onStartAd: () -> Unit = {},
+        onEndAd: () -> Unit = {}
+    ) {
+        val now = System.currentTimeMillis()
 
-        // Avoid re-triggering preroll on orientation change or fullscreen toggle if same channel is already active
-        if (channelStreamUrl == currentChannelUrl && isPlayerActive) {
+        // 1. If currently suppressed due to landscape/portrait or PiP transition, ignore
+        if (now < suppressedUntilTime) {
+            Log.d(TAG, "Channel switch ignored because ads are currently suppressed for layout transition")
             return
         }
-        currentChannelUrl = channelStreamUrl
 
-        channelStartJob?.cancel()
-        channelStartJob = scope.launch {
-            // Brief 600ms buffer so ExoPlayer initializes smoothly
-            delay(600L)
+        // 2. If in Picture-in-Picture mode, strictly do not show ads
+        val activity = context.findActivity()
+        if (activity != null && isPipActive(activity)) {
+            Log.d(TAG, "Channel switch ignored because app is in PiP mode")
+            return
+        }
 
-            val now = System.currentTimeMillis()
-            val timeSinceLastAd = now - lastAdDismissedTime
+        // 3. If stream is the SAME as already playing, it's NOT a channel switch (e.g. recomposition, rotation, pip)
+        if (streamUrl.isNotEmpty() && currentPlayingStreamUrl != null && currentPlayingStreamUrl == streamUrl) {
+            Log.d(TAG, "Same stream already playing, skipping ad logic ($streamUrl)")
+            return
+        }
 
-            // Allow preroll if no ad is currently playing and at least 15s since last ad
-            if (!_adState.value.isAdActive && (lastAdDismissedTime == 0L || timeSinceLastAd >= 15_000L)) {
-                val shouldShowStartAd = Random.nextFloat() < 0.50f
-                if (shouldShowStartAd) {
-                    Log.d(TAG, "Preroll YouTube ad triggered on channel start")
-                    triggerInStreamAd()
+        if (streamUrl.isNotEmpty()) {
+            currentPlayingStreamUrl = streamUrl
+        }
+        onAdStartedCallback = onStartAd
+        onAdEndedCallback = onEndAd
+
+        preloadAdMobNativeAd(context)
+
+        // 4. Initial channel play vs subsequent channel switches:
+        if (!hasPlayedFirstChannel) {
+            hasPlayedFirstChannel = true
+            channelSwitchCount = 0
+            // Pick target for upcoming channel switches: 2 or 3 switches
+            switchesUntilNextAd = Random.nextInt(2, 4)
+            lastAdDismissedTime = System.currentTimeMillis() // Start cooldown timer from initial play
+            Log.d(TAG, "First channel started: Next ad will trigger on switch #$switchesUntilNextAd")
+            // Do NOT interrupt the initial stream play with an ad
+            schedulePeriodicVideoAd(context)
+            return
+        }
+
+        // 5. Subsequent channel switches (from channel list or category folder):
+        channelSwitchCount++
+        Log.d(TAG, "Channel switch registered (#$channelSwitchCount / target: $switchesUntilNextAd)")
+
+        val timeSinceLastAd = if (lastAdDismissedTime > 0L) (now - lastAdDismissedTime) else Long.MAX_VALUE
+        val isCooldownPassed = timeSinceLastAd >= MIN_CHANNEL_SWITCH_AD_COOLDOWN_MS
+
+        // Trigger ad ONLY when both switch target count AND cooldown timing have passed
+        if (channelSwitchCount >= switchesUntilNextAd && isCooldownPassed) {
+            val triggeredTarget = switchesUntilNextAd
+            channelSwitchCount = 0
+            // Next ad target randomly chosen between 2 or 3 switches
+            switchesUntilNextAd = Random.nextInt(2, 4)
+            lastAdDismissedTime = System.currentTimeMillis()
+            Log.d(TAG, "Target reached ($triggeredTarget switches) & cooldown satisfied. Showing ad! Next target: switch #$switchesUntilNextAd")
+
+            scope.launch {
+                delay(300L)
+                val act = context.findActivity()
+                if (act == null || isPipActive(act) || System.currentTimeMillis() < suppressedUntilTime) {
+                    return@launch
+                }
+
+                if (preloadedInterstitialAd != null) {
+                    showRealInterstitialAd(act, onStartAd, onEndAd)
+                } else {
+                    fetchAndShowRealInterstitial(act, onStartAd, onEndAd)
                 }
             }
         }
+
+        // Reschedule periodic mid-roll full screen ad for 5 to 10 minutes
+        schedulePeriodicVideoAd(context)
     }
 
-    /**
-     * Starts or syncs the periodic random ad schedule while video is playing.
-     * Matches the user requirement:
-     * "random kbhi 2 ads 1 he min. m aa rhe h kbhi 5 min. pr 1 ads random mtlb ads kbhi bhi show ho skta h"
-     */
-    fun updatePlaybackStatus(isPlaying: Boolean, context: Context? = null) {
-        isPlayerActive = isPlaying
-        if (context != null) {
-            appContext = context.applicationContext
-            if (adMobCreative == null) {
-                preloadAdMobNativeAd(context)
+    private fun showRealInterstitialAd(
+        activity: Activity,
+        onStartAd: () -> Unit,
+        onEndAd: () -> Unit
+    ) {
+        if (isPipActive(activity) || System.currentTimeMillis() < suppressedUntilTime) {
+            Log.d(TAG, "Suppressed showing interstitial: PiP active or in orientation transition")
+            return
+        }
+        val ad = preloadedInterstitialAd ?: return
+        preloadedInterstitialAd = null
+
+        ad.fullScreenContentCallback = object : FullScreenContentCallback() {
+            override fun onAdShowedFullScreenContent() {
+                Log.d(TAG, "AdMob Real Interstitial Ad is showing on screen")
+            }
+
+            override fun onAdDismissedFullScreenContent() {
+                Log.d(TAG, "AdMob Real Interstitial Ad dismissed by user")
+                lastAdDismissedTime = System.currentTimeMillis()
+                preloadInterstitial(activity)
+                onEndAd()
+            }
+
+            override fun onAdFailedToShowFullScreenContent(error: AdError) {
+                Log.e(TAG, "AdMob Real Interstitial failed to show: ${error.message}")
+                preloadInterstitial(activity)
+                onEndAd()
             }
         }
 
-        if (isPlaying) {
-            if (randomAdScheduleJob == null || randomAdScheduleJob?.isActive == false) {
-                startRandomAdLoop()
-            }
+        try {
+            onStartAd()
+            ad.show(activity)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error showing AdMob Interstitial Ad", e)
+            onEndAd()
         }
     }
 
-    private fun startRandomAdLoop() {
-        randomAdScheduleJob?.cancel()
-        randomAdScheduleJob = scope.launch {
-            while (true) {
-                // Randomized intervals matching user description:
-                // Tier 1 (35%): Short interval (25 to 45s) -> allows 2 ads in ~1 minute
-                // Tier 2 (35%): Medium interval (60 to 120s) -> ~1 to 2 min
-                // Tier 3 (30%): Long interval (240 to 330s) -> ~4 to 5.5 minutes!
-                val roll = Random.nextInt(100)
-                val randomSeconds = when {
-                    roll < 35 -> Random.nextInt(25, 46)
-                    roll < 70 -> Random.nextInt(60, 121)
-                    else -> Random.nextInt(240, 331)
-                }
-                Log.d(TAG, "Next random in-stream ad scheduled in $randomSeconds seconds")
-
-                // Tick second by second so pauses or brief buffering don't reset the schedule
-                var elapsedActiveSeconds = 0
-                while (elapsedActiveSeconds < randomSeconds) {
-                    delay(1000L)
-                    if (isPlayerActive && !_adState.value.isAdActive) {
-                        elapsedActiveSeconds++
+    private fun fetchAndShowRealInterstitial(
+        activity: Activity,
+        onStartAd: () -> Unit,
+        onEndAd: () -> Unit
+    ) {
+        if (isPipActive(activity) || System.currentTimeMillis() < suppressedUntilTime) {
+            return
+        }
+        isInterstitialLoading = true
+        InterstitialAd.load(
+            activity,
+            TEST_INTERSTITIAL_AD_UNIT_ID,
+            AdRequest.Builder().build(),
+            object : InterstitialAdLoadCallback() {
+                override fun onAdLoaded(ad: InterstitialAd) {
+                    isInterstitialLoading = false
+                    preloadedInterstitialAd = ad
+                    if (!isPipActive(activity) && System.currentTimeMillis() >= suppressedUntilTime) {
+                        showRealInterstitialAd(activity, onStartAd, onEndAd)
                     }
                 }
 
-                if (isPlayerActive && !_adState.value.isAdActive) {
-                    val timeSinceLastAd = System.currentTimeMillis() - lastAdDismissedTime
-                    // Minimum safety gap of 15 seconds after dismissing previous ad
-                    if (lastAdDismissedTime == 0L || timeSinceLastAd >= 15_000L) {
-                        Log.d(TAG, "Triggering scheduled in-stream ad during live stream")
-                        triggerInStreamAd()
-                    }
+                override fun onAdFailedToLoad(error: LoadAdError) {
+                    isInterstitialLoading = false
+                    Log.w(TAG, "Immediate interstitial load failed (${error.code}): ${error.message}")
                 }
             }
-        }
+        )
     }
 
-    /**
-     * Manually or automatically trigger an in-stream video ad.
-     * Priority:
-     * 1. 50% chance to show the exact YouTube survey ad from Photos 1 & 2 ("Help YouTube by answering one question")
-     * 2. AdMob loaded native test ad or other YouTube creatives.
-     */
-    fun triggerInStreamAd(customCreative: InStreamAdCreative? = null) {
+    private fun showRealNativeAdOverlay(context: Context) {
         if (_adState.value.isAdActive) return
+        val ad = preloadedNativeAd ?: return
+        preloadedNativeAd = null
 
-        val creative = customCreative ?: run {
-            if (Random.nextBoolean()) {
-                YOUTUBE_SURVEY_CREATIVE
-            } else {
-                adMobCreative ?: SAMPLE_CREATIVES.random()
-            }
-        }
+        activeNativeAd = ad
+        _activeNativeAdFlow.value = ad
 
-        // 22 seconds matches the exact "0:22" displayed in user Reference Photos 1 & 2
-        val totalDuration = if (creative.id == YOUTUBE_SURVEY_CREATIVE.id) 22 else 15
-        val skipCountdown = 5 // 5 seconds before skip ad button activates
+        val totalDuration = 16
+        val skipCountdown = 5
 
         _adState.value = InStreamAdState(
             isAdActive = true,
-            creative = creative,
+            creative = InStreamAdCreative(
+                title = ad.headline ?: "",
+                subtitle = ad.body ?: "",
+                advertiserName = ad.advertiser ?: "",
+                ctaText = ad.callToAction ?: "Open"
+            ),
             totalDurationSeconds = totalDuration,
             remainingSeconds = totalDuration,
             skipCountdownSeconds = skipCountdown,
             canSkip = false
         )
+
+        try {
+            onAdStartedCallback?.invoke()
+        } catch (_: Exception) {}
 
         countdownJob?.cancel()
         countdownJob = scope.launch {
@@ -320,12 +402,12 @@ object InStreamAdManager {
                 if (!current.isAdActive) break
 
                 val newRemaining = (current.remainingSeconds - 1).coerceAtLeast(0)
-                val newSkipCount = (current.skipCountdownSeconds - 1).coerceAtLeast(0)
-                val canSkipNow = newSkipCount <= 0
+                val newSkip = (current.skipCountdownSeconds - 1).coerceAtLeast(0)
+                val canSkipNow = newSkip <= 0
 
                 _adState.value = current.copy(
                     remainingSeconds = newRemaining,
-                    skipCountdownSeconds = newSkipCount,
+                    skipCountdownSeconds = newSkip,
                     canSkip = canSkipNow
                 )
 
@@ -335,35 +417,107 @@ object InStreamAdManager {
                 }
             }
         }
+
+        preloadNative(context)
     }
 
     /**
-     * User tapped the "Skip ad ▶|" button or ad finished.
+     * Schedules periodic full-screen interstitial ad while video is playing (random 5 to 10 minutes).
      */
-    fun dismissAd() {
+    fun schedulePeriodicVideoAd(context: Context) {
+        midrollScheduleJob?.cancel()
+        midrollScheduleJob = scope.launch {
+            // Random delay between 5 and 10 minutes (300 to 600 seconds)
+            val delaySeconds = Random.nextInt(300, 601)
+            Log.d(TAG, "Periodic full-screen ad scheduled in $delaySeconds seconds (~${delaySeconds / 60} mins)")
+            delay(delaySeconds * 1000L)
+
+            // If player was closed in the meantime, abort
+            if (currentPlayingStreamUrl == null) {
+                Log.d(TAG, "Periodic ad cancelled because video playback ended")
+                return@launch
+            }
+
+            val activity = context.findActivity()
+            if (activity == null || isPipActive(activity) || System.currentTimeMillis() < suppressedUntilTime) {
+                Log.d(TAG, "Periodic ad postponed due to PiP, transition, or inactive activity")
+                delay(60_000L)
+                schedulePeriodicVideoAd(context)
+                return@launch
+            }
+
+            // Cooldown check (don't show if another ad was shown within last 60 seconds)
+            val now = System.currentTimeMillis()
+            if (lastAdDismissedTime > 0L && (now - lastAdDismissedTime) < 60_000L) {
+                schedulePeriodicVideoAd(context)
+                return@launch
+            }
+
+            Log.d(TAG, "Triggering periodic full-screen ad after 5-10 min playback")
+            if (preloadedInterstitialAd != null) {
+                showRealInterstitialAd(
+                    activity,
+                    onStartAd = { onAdStartedCallback?.invoke() },
+                    onEndAd = {
+                        onAdEndedCallback?.invoke()
+                        schedulePeriodicVideoAd(context)
+                    }
+                )
+            } else {
+                fetchAndShowRealInterstitial(
+                    activity,
+                    onStartAd = { onAdStartedCallback?.invoke() },
+                    onEndAd = {
+                        onAdEndedCallback?.invoke()
+                        schedulePeriodicVideoAd(context)
+                    }
+                )
+            }
+        }
+    }
+
+    fun scheduleMidRollAd(context: Context) {
+        schedulePeriodicVideoAd(context)
+    }
+
+    /**
+     * User tapped the "Skip ad ▶|" button or ad completed.
+     */
+    fun dismissAd(onResumePlayback: () -> Unit = {}) {
         if (!_adState.value.isAdActive) return
         countdownJob?.cancel()
         countdownJob = null
         lastAdDismissedTime = System.currentTimeMillis()
-        _adState.value = InStreamAdState(isAdActive = false)
-        Log.d(TAG, "In-stream ad dismissed, resuming live channel stream")
 
-        // Preload next AdMob native test ad for next round
-        appContext?.let { ctx ->
-            preloadAdMobNativeAd(ctx)
-        }
+        activeNativeAd?.destroy()
+        activeNativeAd = null
+        _activeNativeAdFlow.value = null
+
+        _adState.value = InStreamAdState(isAdActive = false)
+        Log.d(TAG, "In-stream native ad dismissed, resuming live playback")
+
+        try {
+            onAdEndedCallback?.invoke()
+        } catch (_: Exception) {}
+
+        try {
+            onResumePlayback()
+        } catch (_: Exception) {}
     }
 
-    /**
-     * Called when the video player is completely closed by the user.
-     */
     fun onPlayerClosed() {
-        isPlayerActive = false
-        randomAdScheduleJob?.cancel()
-        randomAdScheduleJob = null
-        channelStartJob?.cancel()
-        channelStartJob = null
-        dismissAd()
-        currentChannelUrl = null
+        currentPlayingStreamUrl = null
+        hasPlayedFirstChannel = false
+        countdownJob?.cancel()
+        countdownJob = null
+        midrollScheduleJob?.cancel()
+        midrollScheduleJob = null
+        _adState.value = InStreamAdState(isAdActive = false)
+        activeNativeAd?.destroy()
+        activeNativeAd = null
+        _activeNativeAdFlow.value = null
+        preloadedNativeAd?.destroy()
+        preloadedNativeAd = null
+        preloadedInterstitialAd = null
     }
 }
