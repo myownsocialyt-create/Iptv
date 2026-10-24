@@ -1,5 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Hypnotix</string>
-    <string name="google_app_id" translatable="false">1:100000000000:android:hypnotixiptv</string>
+    <string name="app_name">Hypnotix IPTV</string>
 </resources>
