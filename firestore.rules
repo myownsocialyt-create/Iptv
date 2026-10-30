@@ -1,0 +1,67 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Pillar 1: Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Global Primitives
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // Schema Validation Helper for Notification
+    function isValidNotification(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.audience is string && (data.audience == 'all' || data.audience == 'private') &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
+             data.message is string && data.message.size() >= 1 && data.message.size() <= 1000 &&
+             (!('imageUrl' in data) || data.imageUrl == null || (data.imageUrl is string && data.imageUrl.size() <= 1000));
+    }
+
+    match /notifications/{notificationId} {
+      allow get: if isValidId(notificationId) &&
+                    (existing().audience == 'all' || (isSignedIn() && existing().userId == request.auth.uid));
+
+      allow list: if existing().audience == 'all' || (isSignedIn() && existing().userId == request.auth.uid);
+
+      allow create: if isValidId(notificationId) &&
+                       isValidNotification(incoming()) &&
+                       ((isSignedIn() && incoming().userId == request.auth.uid) ||
+                        (incoming().audience == 'all' && incoming().userId == 'admin_broadcast')) &&
+                       incoming().keys().hasAll(['userId', 'audience', 'title', 'message', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'audience', 'title', 'message', 'imageUrl', 'createdAt', 'updatedAt']) &&
+                       incoming().createdAt is timestamp &&
+                       incoming().createdAt <= request.time &&
+                       incoming().updatedAt is timestamp &&
+                       incoming().updatedAt <= request.time;
+
+      allow update: if isSignedIn() &&
+                       isValidId(notificationId) &&
+                       isValidNotification(incoming()) &&
+                       existing().userId == request.auth.uid &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().updatedAt is timestamp &&
+                       incoming().updatedAt <= request.time &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['title', 'message', 'imageUrl', 'audience', 'updatedAt']);
+
+      allow delete: if isSignedIn() &&
+                       isValidId(notificationId) &&
+                       existing().userId == request.auth.uid;
+    }
+  }
+}

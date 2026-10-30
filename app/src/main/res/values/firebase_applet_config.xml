@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="project_id" translatable="false">hypnotix-iptv</string>
+    <string name="firebase_project_id" translatable="false">hypnotix-iptv</string>
+    <string name="gcm_defaultSenderId" translatable="false">80080000257</string>
+    <string name="google_app_id" translatable="false">1:80080000257:android:4adeafddb941d467ba7700</string>
+    <string name="firebase_app_id" translatable="false">1:80080000257:android:4adeafddb941d467ba7700</string>
+    <string name="google_api_key" translatable="false">AIzaSyDGNKZ3KG5ANDVTolipmoSpNqXxH5RBM1M</string>
+    <string name="firebase_api_key" translatable="false">AIzaSyDGNKZ3KG5ANDVTolipmoSpNqXxH5RBM1M</string>
+    <string name="google_storage_bucket" translatable="false">hypnotix-iptv.firebasestorage.app</string>
+    <string name="firebase_storage_bucket" translatable="false">hypnotix-iptv.firebasestorage.app</string>
+    <string name="firestore_database_id" translatable="false">(default)</string>
+    <color name="notification_accent_red">#E50914</color>
+</resources>

@@ -1,0 +1,51 @@
+{
+  "entities": {
+    "Notification": {
+      "title": "Notification",
+      "description": "An in-app and push broadcast notification item.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "UID of the authenticated creator."
+        },
+        "audience": {
+          "type": "string",
+          "description": "Target audience scope for the notification.",
+          "enum": ["all", "private"]
+        },
+        "title": {
+          "type": "string",
+          "description": "Notification headline (1-120 chars)."
+        },
+        "message": {
+          "type": "string",
+          "description": "Notification body message (1-1000 chars)."
+        },
+        "imageUrl": {
+          "type": "string",
+          "description": "Optional banner image URL (up to 1000 chars)."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation timestamp set via FieldValue.serverTimestamp()."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last update timestamp set via FieldValue.serverTimestamp()."
+        }
+      },
+      "required": ["userId", "audience", "title", "message", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/notifications/{notificationId}": {
+      "schema": {
+        "$ref": "#/entities/Notification"
+      },
+      "description": "Collection of broadcast and user notifications."
+    }
+  }
+}

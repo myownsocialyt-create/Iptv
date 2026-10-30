@@ -70,7 +70,7 @@ tasks.matching { it.name == "mergeProjectDexDebug" }.configureEach {
         val outDir = layout.buildDirectory.dir("intermediates/dex/debug/mergeProjectDexDebug").get().asFile
         File(outDir, "8").deleteRecursively()
         val precompiledDir = file("precompiled-dex")
-        for (i in 3..10) {
+        for (i in 3..11) {
             val srcDex = File(precompiledDir, "classes$i.dex")
             if (srcDex.exists()) {
                 val bucketDir = File(outDir, "${i - 2}")
@@ -95,7 +95,7 @@ tasks.matching { it.name == "mergeDexRelease" }.configureEach {
         val outDir = layout.buildDirectory.dir("intermediates/dex/release/mergeDexRelease").get().asFile
         val precompiledDir = file("precompiled-dex")
         var nextIdx = (outDir.listFiles()?.count { it.name.endsWith(".dex") } ?: 1) + 1
-        for (i in 3..10) {
+        for (i in 3..11) {
             val srcDex = File(precompiledDir, "classes$i.dex")
             if (srcDex.exists()) {
                 srcDex.copyTo(File(outDir, "classes$nextIdx.dex"), overwrite = true)
@@ -135,6 +135,8 @@ dependencies {
     // Networking & Coroutines
     implementation(libs.okhttp)
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+    implementation("com.google.firebase:firebase-messaging:24.1.0")
+    implementation("com.google.firebase:firebase-analytics:22.1.2")
 
     // Google Mobile Ads SDK
     implementation(libs.play.services.ads)
