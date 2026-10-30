@@ -137,6 +137,8 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("com.google.firebase:firebase-messaging:24.1.0")
     implementation("com.google.firebase:firebase-analytics:22.1.2")
+    implementation("com.google.firebase:firebase-inappmessaging-display:21.0.1")
+    implementation("com.google.firebase:firebase-config:22.0.1")
 
     // Google Mobile Ads SDK
     implementation(libs.play.services.ads)
