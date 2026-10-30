@@ -297,10 +297,10 @@
         </receiver>
 
         <service
-            android:name="com.example.ui.screens.HypnotixFirebaseMessagingService"
+            android:name="com.example.fcm.HypnotixFcmService"
             android:directBootAware="true"
             android:exported="false">
-            <intent-filter android:priority="500">
+            <intent-filter android:priority="999">
                 <action android:name="com.google.firebase.MESSAGING_EVENT" />
             </intent-filter>
         </service>
