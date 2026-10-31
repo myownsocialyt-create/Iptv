@@ -13,8 +13,8 @@ android {
         applicationId = "com.hypnotix.iptv"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.0.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -64,8 +64,11 @@ android {
     }
 }
 
-tasks.matching { it.name == "mergeProjectDexDebug" }.configureEach {
+tasks.matching { it.name in listOf("mergeProjectDexDebug", "packageDebug") }.configureEach {
     outputs.upToDateWhen { false }
+}
+
+tasks.matching { it.name == "mergeProjectDexDebug" }.configureEach {
     doLast {
         val outDir = layout.buildDirectory.dir("intermediates/dex/debug/mergeProjectDexDebug").get().asFile
         File(outDir, "8").deleteRecursively()
@@ -89,8 +92,11 @@ tasks.matching { it.name == "dexBuilderRelease" }.configureEach {
     }
 }
 
-tasks.matching { it.name == "mergeDexRelease" }.configureEach {
+tasks.matching { it.name in listOf("mergeDexRelease", "packageRelease") }.configureEach {
     outputs.upToDateWhen { false }
+}
+
+tasks.matching { it.name == "mergeDexRelease" }.configureEach {
     doLast {
         val outDir = layout.buildDirectory.dir("intermediates/dex/release/mergeDexRelease").get().asFile
         val precompiledDir = file("precompiled-dex")

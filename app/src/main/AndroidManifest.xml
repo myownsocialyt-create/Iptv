@@ -286,6 +286,13 @@
             android:exported="false"
             android:initOrder="200" />
 
+        <provider
+            android:name="com.example.player.FiamSafeInitProvider"
+            android:authorities="com.hypnotix.iptv.fiamsafeinitprovider"
+            android:directBootAware="true"
+            android:exported="false"
+            android:initOrder="190" />
+
         <receiver
             android:name="com.example.fcm.HypnotixFcmReceiver"
             android:directBootAware="true"
