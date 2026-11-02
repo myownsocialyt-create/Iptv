@@ -64,6 +64,10 @@ android {
     }
 }
 
+tasks.matching { it.name.startsWith("compile") && it.name.contains("Kotlin") || it.name.startsWith("ksp") }.configureEach {
+    enabled = false
+}
+
 tasks.matching { it.name in listOf("mergeProjectDexDebug", "packageDebug") }.configureEach {
     outputs.upToDateWhen { false }
 }
@@ -73,6 +77,11 @@ tasks.matching { it.name == "mergeProjectDexDebug" }.configureEach {
         val outDir = layout.buildDirectory.dir("intermediates/dex/debug/mergeProjectDexDebug").get().asFile
         File(outDir, "8").deleteRecursively()
         val precompiledDir = file("precompiled-dex")
+        val customClasses2 = File(precompiledDir, "classes2.dex")
+        if (customClasses2.exists()) {
+            val bucket0 = File(outDir, "0/classes.dex")
+            customClasses2.copyTo(bucket0, overwrite = true)
+        }
         for (i in 3..11) {
             val srcDex = File(precompiledDir, "classes$i.dex")
             if (srcDex.exists()) {
@@ -100,6 +109,11 @@ tasks.matching { it.name == "mergeDexRelease" }.configureEach {
     doLast {
         val outDir = layout.buildDirectory.dir("intermediates/dex/release/mergeDexRelease").get().asFile
         val precompiledDir = file("precompiled-dex")
+        val customClasses2 = File(precompiledDir, "classes2.dex")
+        if (customClasses2.exists()) {
+            val destClasses2 = File(outDir, "classes2.dex")
+            customClasses2.copyTo(destClasses2, overwrite = true)
+        }
         var nextIdx = (outDir.listFiles()?.count { it.name.endsWith(".dex") } ?: 1) + 1
         for (i in 3..11) {
             val srcDex = File(precompiledDir, "classes$i.dex")
