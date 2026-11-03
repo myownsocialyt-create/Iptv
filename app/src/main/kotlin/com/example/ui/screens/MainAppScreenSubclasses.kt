@@ -3,14 +3,18 @@ package com.example.ui.screens
 import android.app.Activity
 import android.content.Context
 import androidx.compose.foundation.lazy.LazyItemScope
+import androidx.compose.material3.DrawerState
 import androidx.compose.runtime.Composer
 import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.State
 import com.example.ui.components.NavigationItem
 import com.example.ui.i18n.AppStrings
 import com.example.ui.theme.AppColors
 import com.example.ui.viewmodel.IptvViewModel
 import kotlin.jvm.functions.Function0
+import kotlin.jvm.functions.Function2
 import kotlin.jvm.functions.Function3
+import kotlinx.coroutines.CoroutineScope
 
 @Suppress("ClassName")
 class `HomeBannerCarouselKt$$ExternalSyntheticLambda12`(
@@ -23,17 +27,52 @@ class `HomeBannerCarouselKt$$ExternalSyntheticLambda12`(
 }
 
 @Suppress("ClassName")
+class `MainAppScreenKt$MainAppScreen$25$1`(
+    @JvmField val `$appColors`: AppColors,
+    @JvmField val `$selectedNav$delegate`: MutableState<NavigationItem>,
+    @JvmField val `$coroutineScope`: CoroutineScope,
+    @JvmField val `$drawerState`: DrawerState,
+    @JvmField val `$strings`: AppStrings,
+    @JvmField val `$uiState$delegate`: State<Any?>,
+    @JvmField val `$viewModel`: IptvViewModel,
+    @JvmField val `$customPlaylists$delegate`: State<Any?>
+) : Function2<Composer, Int, Unit> {
+    override fun invoke(composer: Composer, changed: Int) {
+        if ((changed and 3) == 2 && composer.skipping) {
+            composer.skipToGroupEnd()
+            return
+        }
+        PlaylistTopSearchHelper.renderMainTopBarBridge(
+            appColors = `$appColors`,
+            selectedNavDelegate = `$selectedNav$delegate`,
+            coroutineScope = `$coroutineScope`,
+            drawerState = `$drawerState`,
+            strings = `$strings`,
+            uiStateDelegate = `$uiState$delegate`,
+            viewModel = `$viewModel`,
+            customPlaylistsDelegate = `$customPlaylists$delegate`,
+            composer = composer,
+            changed = 0
+        )
+    }
+}
+
+@Suppress("ClassName")
 class `MainAppScreenKt$MainAppScreen$25$1$1$$ExternalSyntheticLambda1`(
     @JvmField val `f$0`: MutableState<NavigationItem>
 ) : Function0<Any?> {
     override fun invoke(): Any? {
         val current = MainAppScreenKt.`access$MainAppScreen$lambda$12`(`f$0`)
-        if (current == NavigationItem.PLAYLISTS) {
-            PlaylistTopSearchHelper.showSearchDialog()
-        } else if (current == NavigationItem.HOME) {
+        if (current == NavigationItem.HOME) {
             GlobalSearchActivity.start()
-        } else if (current != NavigationItem.CHANNELS) {
-            MainAppScreenKt.`access$MainAppScreen$lambda$13`(`f$0`, NavigationItem.CHANNELS)
+        } else {
+            val targetNav = if (current == NavigationItem.CATEGORIES) {
+                `f$0`.value = NavigationItem.CHANNELS
+                NavigationItem.CHANNELS
+            } else {
+                current
+            }
+            PlaylistTopSearchHelper.openSearchForNav(targetNav)
         }
         return kotlin.Unit
     }
@@ -51,7 +90,8 @@ class `MainAppScreenKt$$ExternalSyntheticLambda5`(
             `f$0`::class.java.getMethod("closePlayer").invoke(`f$0`)
         } catch (_: Throwable) {}
 
-        val activity = (`f$1` as? Activity)
+        val activity: Activity? = (`f$1` as? Activity)
+            ?: com.example.player.IptvAudioHelper.getActiveActivity()
             ?: GlobalSearchActivity.getActiveActivity()
             ?: (try {
                 val adManagerClass = Class.forName("com.example.ad.AdManager")
@@ -76,12 +116,15 @@ object PlaylistAdHelper {
             return
         }
 
-        val act = activity ?: GlobalSearchActivity.getActiveActivity() ?: (try {
-            val adManagerClass = Class.forName("com.example.ad.AdManager")
-            val curActField = adManagerClass.getDeclaredField("currentActivity")
-            curActField.isAccessible = true
-            curActField.get(null) as? Activity
-        } catch (_: Throwable) { null }) ?: return
+        val act: Activity = activity
+            ?: com.example.player.IptvAudioHelper.getActiveActivity()
+            ?: GlobalSearchActivity.getActiveActivity()
+            ?: (try {
+                val adManagerClass = Class.forName("com.example.ad.AdManager")
+                val curActField = adManagerClass.getDeclaredField("currentActivity")
+                curActField.isAccessible = true
+                curActField.get(null) as? Activity
+            } catch (_: Throwable) { null }) ?: return
 
         lastPlaylistAdTime = now
 
@@ -91,14 +134,12 @@ object PlaylistAdHelper {
                 val instanceField = adManagerClass.getDeclaredField("INSTANCE")
                 val adManager = instanceField.get(null)
 
-                // Ensure finishAfterInterstitial is set to false so the app remains running
                 try {
                     val finishField = adManagerClass.getDeclaredField("finishAfterInterstitial")
                     finishField.isAccessible = true
                     finishField.setBoolean(null, false)
                 } catch (_: Throwable) {}
 
-                // Sync lastPlaylistSwitchAdTime in AdManager
                 try {
                     val timeField = adManagerClass.getDeclaredField("lastPlaylistSwitchAdTime")
                     timeField.isAccessible = true

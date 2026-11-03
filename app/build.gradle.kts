@@ -12,7 +12,7 @@ android {
     defaultConfig {
         applicationId = "com.hypnotix.iptv"
         minSdk = 26
-        targetSdk = 35
+        targetSdk = 36
         versionCode = 2
         versionName = "1.0.1"
 
@@ -101,7 +101,7 @@ tasks.matching { it.name == "dexBuilderRelease" }.configureEach {
     }
 }
 
-tasks.matching { it.name in listOf("mergeDexRelease", "packageRelease") }.configureEach {
+tasks.matching { it.name in listOf("mergeDexRelease", "packageRelease", "buildReleasePreBundle", "packageReleaseBundle") }.configureEach {
     outputs.upToDateWhen { false }
 }
 

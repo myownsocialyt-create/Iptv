@@ -67,14 +67,15 @@ class GlobalSearchActivity : ComponentActivity() {
     companion object {
         private var activeActivityRef: WeakReference<ComponentActivity>? = null
 
-        fun getActiveActivity(): ComponentActivity? = activeActivityRef?.get()
+        fun getActiveActivity(): ComponentActivity? =
+            activeActivityRef?.get() ?: (com.example.player.IptvAudioHelper.getActiveActivity() as? ComponentActivity)
 
         fun registerActivity(act: ComponentActivity) {
             activeActivityRef = WeakReference(act)
         }
 
         fun start(context: Context? = null) {
-            val ctx = context ?: getActiveActivity() ?: getApplicationContext() ?: return
+            val ctx = context ?: getActiveActivity() ?: com.example.player.IptvAudioHelper.getActiveActivity() ?: getApplicationContext() ?: return
             val intent = Intent(ctx, GlobalSearchActivity::class.java).apply {
                 if (ctx !is Activity) {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)

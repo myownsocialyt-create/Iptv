@@ -1,12 +1,7 @@
 package com.example.ui.screens
 
 import android.app.Activity
-import android.app.Dialog
-import android.graphics.Color as AndroidColor
-import android.graphics.drawable.ColorDrawable
-import android.view.Gravity
-import android.view.ViewGroup
-import android.view.WindowManager
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -24,26 +19,38 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.ui.components.NavigationItem
 import com.example.ui.i18n.AppStrings
 import com.example.ui.theme.AppColors
+import com.example.ui.viewmodel.IptvViewModel
+import kotlinx.coroutines.CoroutineScope
 
 /**
- * Helper to manage upper Search Bar on the Playlists screen.
+ * Helper to manage upper Search Bar on the Channel, Favorites, and Playlists screens.
  * Replaces the lower in-list search bar with a clean, top-bar search experience.
  */
 object PlaylistTopSearchHelper {
-    var isSearchOpen by mutableStateOf(false)
+    @JvmField
+    val `isSearchOpen$delegate`: MutableState<Boolean> = mutableStateOf(false)
+
+    var isSearchOpen: Boolean
+        get() = `isSearchOpen$delegate`.value
+        set(value) {
+            `isSearchOpen$delegate`.value = value
+        }
+
+    var isTopSearchVisible by mutableStateOf(false)
     var currentQuery by mutableStateOf("")
+    private var searchOpenedForNav: NavigationItem? = null
     private var boundQueryChange: ((String) -> Unit)? = null
     var boundAppColors: AppColors? = null
     var boundStrings: AppStrings? = null
-    private var activeDialog: Dialog? = null
+    var boundViewModel: IptvViewModel? = null
 
     fun bind(
         appColors: AppColors,
@@ -54,61 +61,128 @@ object PlaylistTopSearchHelper {
         boundAppColors = appColors
         boundStrings = strings
         boundQueryChange = onSearchQueryChange
-        if (currentQuery.isEmpty() && searchQuery.isNotEmpty()) {
+        if (!isTopSearchVisible) {
             currentQuery = searchQuery
         }
     }
 
     fun toggleSearch(activity: Activity? = null) {
-        showSearchDialog(activity)
+        if (isTopSearchVisible) {
+            closeSearch()
+        } else {
+            showSearchDialog(activity)
+        }
     }
 
     fun showSearchDialog(activity: Activity? = null) {
-        val act = activity ?: GlobalSearchActivity.getActiveActivity() ?: return
-        act.runOnUiThread {
-            activeDialog?.dismiss()
+        isTopSearchVisible = true
+    }
 
-            val dialog = Dialog(act, android.R.style.Theme_Translucent_NoTitleBar)
-            activeDialog = dialog
-            dialog.window?.let { window ->
-                window.setGravity(Gravity.TOP)
-                window.setLayout(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                )
-                window.setBackgroundDrawable(ColorDrawable(AndroidColor.TRANSPARENT))
-                window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS)
-            }
+    fun openSearchForNav(navItem: NavigationItem) {
+        searchOpenedForNav = navItem
+        isTopSearchVisible = true
+    }
 
-            val composeView = ComposeView(act).apply {
-                setContent {
-                    val colors = boundAppColors ?: GlobalSearchActivity.getCachedAppColors()
-                    val strs = boundStrings ?: AppStrings()
-                    RenderTopSearchBar(
-                        appColors = colors,
-                        strings = strs,
-                        onDismiss = {
-                            dialog.dismiss()
-                            activeDialog = null
-                        }
-                    )
-                }
-            }
-
-            dialog.setOnDismissListener {
-                activeDialog = null
-                isSearchOpen = false
-            }
-
-            dialog.setContentView(composeView)
-            isSearchOpen = true
-            dialog.show()
-        }
+    fun closeSearch() {
+        isTopSearchVisible = false
+        searchOpenedForNav = null
+        updateQuery("")
     }
 
     fun updateQuery(newQuery: String) {
         currentQuery = newQuery
         boundQueryChange?.invoke(newQuery)
+        if (searchOpenedForNav != NavigationItem.PLAYLISTS) {
+            try {
+                boundViewModel?.setSearchQuery(newQuery)
+            } catch (_: Throwable) {}
+        }
+    }
+
+    fun renderMainTopBarBridge(
+        appColors: AppColors,
+        selectedNavDelegate: MutableState<NavigationItem>,
+        coroutineScope: CoroutineScope,
+        drawerState: DrawerState,
+        strings: AppStrings,
+        uiStateDelegate: State<Any?>,
+        viewModel: IptvViewModel,
+        customPlaylistsDelegate: State<Any?>,
+        composer: Composer,
+        changed: Int
+    ) {
+        try {
+            val method = PlaylistTopSearchHelper::class.java.declaredMethods.firstOrNull {
+                it.name == "RenderMainTopBar" && it.parameterCount == 10
+            }
+            method?.invoke(
+                this,
+                appColors,
+                selectedNavDelegate,
+                coroutineScope,
+                drawerState,
+                strings,
+                uiStateDelegate,
+                viewModel,
+                customPlaylistsDelegate,
+                composer,
+                changed
+            )
+        } catch (t: Throwable) {
+            t.printStackTrace()
+        }
+    }
+
+    @Composable
+    fun RenderMainTopBar(
+        appColors: AppColors,
+        selectedNavDelegate: MutableState<NavigationItem>,
+        coroutineScope: CoroutineScope,
+        drawerState: DrawerState,
+        strings: AppStrings,
+        uiStateDelegate: State<Any?>,
+        viewModel: IptvViewModel,
+        customPlaylistsDelegate: State<Any?>
+    ) {
+        boundViewModel = viewModel
+        boundAppColors = appColors
+        boundStrings = strings
+
+        val selectedNav = MainAppScreenKt.`access$MainAppScreen$lambda$12`(selectedNavDelegate)
+
+        LaunchedEffect(selectedNav) {
+            val openedNav = searchOpenedForNav
+            if (isTopSearchVisible && openedNav != null && selectedNav != openedNav) {
+                closeSearch()
+            }
+        }
+
+        if (selectedNav != NavigationItem.XTREAM && selectedNav != NavigationItem.SETTINGS) {
+            if (isTopSearchVisible && selectedNav != NavigationItem.HOME) {
+                RenderTopSearchBar(
+                    appColors = appColors,
+                    strings = strings,
+                    onDismiss = { closeSearch() }
+                )
+            } else {
+                Surface(
+                    modifier = Modifier.fillMaxWidth().statusBarsPadding(),
+                    color = appColors.surface,
+                    shadowElevation = 0.5.dp
+                ) {
+                    `MainAppScreenKt$MainAppScreen$25$1$1`(
+                        coroutineScope,
+                        drawerState,
+                        appColors,
+                        strings,
+                        selectedNavDelegate,
+                        uiStateDelegate,
+                        viewModel,
+                        customPlaylistsDelegate
+                    ).invoke(currentComposer, 0)
+                }
+            }
+        }
     }
 
     @Composable
@@ -120,14 +194,22 @@ object PlaylistTopSearchHelper {
         val focusRequester = remember { FocusRequester() }
         val keyboardController = LocalSoftwareKeyboardController.current
 
+        BackHandler(enabled = isTopSearchVisible) {
+            keyboardController?.hide()
+            onDismiss()
+        }
+
         LaunchedEffect(Unit) {
-            focusRequester.requestFocus()
-            keyboardController?.show()
+            try {
+                focusRequester.requestFocus()
+                keyboardController?.show()
+            } catch (_: Throwable) {}
         }
 
         Surface(
             color = appColors.surface,
             tonalElevation = 4.dp,
+            shadowElevation = 2.dp,
             modifier = Modifier.fillMaxWidth().statusBarsPadding()
         ) {
             Row(
@@ -138,7 +220,10 @@ object PlaylistTopSearchHelper {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(
-                    onClick = onDismiss,
+                    onClick = {
+                        keyboardController?.hide()
+                        onDismiss()
+                    },
                     modifier = Modifier.size(44.dp)
                 ) {
                     Icon(
@@ -174,7 +259,7 @@ object PlaylistTopSearchHelper {
                         Box(modifier = Modifier.weight(1f)) {
                             if (currentQuery.isEmpty()) {
                                 Text(
-                                    text = "Search playlists...",
+                                    text = "Search channels...",
                                     color = appColors.textMuted,
                                     fontSize = 14.sp
                                 )

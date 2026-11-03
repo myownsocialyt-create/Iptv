@@ -32,5 +32,67 @@ jobs:
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: app-debug
+          name: app-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Prepare Release Keystore & Build Signed Release APK and AAB
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "Decoding custom release keystore from GitHub Secrets..."
+            echo "$KEYSTORE_BASE64" | tr -d ' \t\r\n' | base64 -d > "$RUNNER_TEMP/release.jks"
+            STORE_FILE="$RUNNER_TEMP/release.jks"
+            STORE_PASS="$KEYSTORE_PASSWORD"
+            ALIAS_NAME="$KEY_ALIAS"
+            KEY_PASS="$KEY_PASSWORD"
+          else
+            echo "KEYSTORE_BASE64 secret not set; falling back to project debug.keystore..."
+            STORE_FILE="$GITHUB_WORKSPACE/debug.keystore"
+            STORE_PASS="android"
+            ALIAS_NAME="androiddebugkey"
+            KEY_PASS="android"
+          fi
+
+          gradle assembleRelease bundleRelease --no-daemon --stacktrace \
+            -Pandroid.injected.signing.store.file="$STORE_FILE" \
+            -Pandroid.injected.signing.store.password="$STORE_PASS" \
+            -Pandroid.injected.signing.key.alias="$ALIAS_NAME" \
+            -Pandroid.injected.signing.key.password="$KEY_PASS"
+
+          # Ensure AAB is signed with the keystore for Play Console upload
+          AAB_PATH=$(find app/build/outputs/bundle/release -name "*.aab" | head -n 1)
+          if [ -n "$AAB_PATH" ]; then
+            jarsigner -verbose -sigalg SHA256withRSA -digestalg SHA-256 \
+              -keystore "$STORE_FILE" \
+              -storepass "$STORE_PASS" \
+              -keypass "$KEY_PASS" \
+              "$AAB_PATH" "$ALIAS_NAME" || true
+          fi
+
+          # Ensure Release APK is aligned and signed with v1/v2/v3 signatures
+          APK_PATH=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
+          BUILD_TOOLS_DIR=$(ls -d $ANDROID_HOME/build-tools/* | sort -V | tail -n 1)
+          if [ -n "$APK_PATH" ] && [ -n "$BUILD_TOOLS_DIR" ]; then
+            "$BUILD_TOOLS_DIR/apksigner" sign \
+              --ks "$STORE_FILE" \
+              --ks-pass "pass:$STORE_PASS" \
+              --ks-key-alias "$ALIAS_NAME" \
+              --key-pass "pass:$KEY_PASS" \
+              "$APK_PATH"
+          fi
+
+      - name: Upload Signed Release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release-signed-apk
+          path: app/build/outputs/apk/release/*.apk
+
+      - name: Upload Signed Release AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release-signed-aab
+          path: app/build/outputs/bundle/release/*.aab

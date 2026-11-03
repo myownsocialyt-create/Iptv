@@ -55,13 +55,53 @@ public class IptvAudioHelper {
     private static Bitmap cachedPlayBitmap = null;
     private static Bitmap cachedPauseBitmap = null;
 
+    public static Activity getActiveActivity() {
+        if (activeActivityRef != null) {
+            Activity a = activeActivityRef.get();
+            if (a != null && !a.isFinishing() && !a.isDestroyed()) {
+                return a;
+            }
+        }
+        try {
+            Class<?> activityThreadClass = Class.forName("android.app.ActivityThread");
+            Object activityThread = activityThreadClass.getMethod("currentActivityThread").invoke(null);
+            Field activitiesField = activityThreadClass.getDeclaredField("mActivities");
+            activitiesField.setAccessible(true);
+            Object activities = activitiesField.get(activityThread);
+            if (activities instanceof java.util.Map) {
+                for (Object activityRecord : ((java.util.Map<?, ?>) activities).values()) {
+                    Class<?> recordClass = activityRecord.getClass();
+                    Field pausedField = recordClass.getDeclaredField("paused");
+                    pausedField.setAccessible(true);
+                    if (!pausedField.getBoolean(activityRecord)) {
+                        Field activityField = recordClass.getDeclaredField("activity");
+                        activityField.setAccessible(true);
+                        Activity act = (Activity) activityField.get(activityRecord);
+                        if (act != null && !act.isFinishing() && !act.isDestroyed()) {
+                            activeActivityRef = new WeakReference<Activity>(act);
+                            return act;
+                        }
+                    }
+                }
+            }
+        } catch (Throwable ignored) {}
+        return null;
+    }
+
     public static void initFiamSafeHooks(Context context) {
+        try {
+            com.google.firebase.inappmessaging.FirebaseInAppMessaging.getInstance().setMessagesSuppressed(true);
+            com.google.firebase.inappmessaging.FirebaseInAppMessaging.getInstance().setAutomaticDataCollectionEnabled(false);
+        } catch (Throwable ignored) {}
         ensureAppHooks();
         installSafeFiamImageLoader();
         try {
             mainHandler.postDelayed(new Runnable() {
                 @Override
                 public void run() {
+                    try {
+                        com.google.firebase.inappmessaging.FirebaseInAppMessaging.getInstance().setMessagesSuppressed(true);
+                    } catch (Throwable ignored) {}
                     installSafeFiamImageLoader();
                 }
             }, 500);

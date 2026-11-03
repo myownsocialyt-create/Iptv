@@ -11,10 +11,14 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="com.google.android.gms.permission.AD_ID" />
+    <uses-permission android:name="com.android.vending.BILLING" />
     <uses-permission android:name="android.permission.ACCESS_ADSERVICES_AD_ID" />
     <uses-permission android:name="android.permission.ACCESS_ADSERVICES_ATTRIBUTION" />
     <uses-permission android:name="android.permission.ACCESS_ADSERVICES_TOPICS" /> <!-- Android package visibility setting -->
     <queries>
+        <intent>
+            <action android:name="com.android.vending.billing.InAppBillingService.BIND" />
+        </intent>
 
         <!-- For browser content -->
         <intent>
@@ -60,7 +64,6 @@
         android:allowBackup="true"
         android:appComponentFactory="androidx.core.app.CoreComponentFactory"
         android:dataExtractionRules="@xml/data_extraction_rules"
-        android:debuggable="true"
         android:extractNativeLibs="false"
         android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"
@@ -82,6 +85,11 @@
             android:name="com.google.firebase.messaging.default_notification_channel_id"
             android:value="hypnotix_broadcasts" />
 
+        <!-- Google Play Billing Library Version for Play Console One-Time / In-App Products -->
+        <meta-data
+            android:name="com.google.android.play.billingclient.version"
+            android:value="7.1.1" />
+
         <!-- Google AdMob Application ID (Official Sample/Test ID) -->
         <meta-data
             android:name="com.google.android.gms.ads.APPLICATION_ID"
@@ -95,6 +103,9 @@
         <meta-data
             android:name="firebase_messaging_auto_init_enabled"
             android:value="true" />
+        <meta-data
+            android:name="firebase_inapp_messaging_auto_data_collection_enabled"
+            android:value="false" />
         <meta-data
             android:name="google_analytics_adid_collection_enabled"
             android:value="false" />
