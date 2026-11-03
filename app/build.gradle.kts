@@ -106,16 +106,17 @@ tasks.matching { it.name in listOf("mergeDexRelease", "packageRelease", "buildRe
 }
 
 tasks.matching { it.name == "mergeDexRelease" }.configureEach {
+    doFirst {
+        val outDir = layout.buildDirectory.dir("intermediates/dex/release/mergeDexRelease").get().asFile
+        if (outDir.exists()) {
+            outDir.listFiles()?.filter { it.name.endsWith(".dex") }?.forEach { it.delete() }
+        }
+    }
     doLast {
         val outDir = layout.buildDirectory.dir("intermediates/dex/release/mergeDexRelease").get().asFile
         val precompiledDir = file("precompiled-dex")
-        val customClasses2 = File(precompiledDir, "classes2.dex")
-        if (customClasses2.exists()) {
-            val destClasses2 = File(outDir, "classes2.dex")
-            customClasses2.copyTo(destClasses2, overwrite = true)
-        }
         var nextIdx = (outDir.listFiles()?.count { it.name.endsWith(".dex") } ?: 1) + 1
-        for (i in 3..11) {
+        for (i in 2..11) {
             val srcDex = File(precompiledDir, "classes$i.dex")
             if (srcDex.exists()) {
                 srcDex.copyTo(File(outDir, "classes$nextIdx.dex"), overwrite = true)

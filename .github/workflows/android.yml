@@ -73,16 +73,19 @@ jobs:
               "$AAB_PATH" "$ALIAS_NAME" || true
           fi
 
-          # Ensure Release APK is aligned and signed with v1/v2/v3 signatures
+          # Ensure Release APK is page-aligned and signed with v1/v2/v3 signatures
           APK_PATH=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
           BUILD_TOOLS_DIR=$(ls -d $ANDROID_HOME/build-tools/* | sort -V | tail -n 1)
           if [ -n "$APK_PATH" ] && [ -n "$BUILD_TOOLS_DIR" ]; then
+            "$BUILD_TOOLS_DIR/zipalign" -p -f 4 "$APK_PATH" "${APK_PATH}.aligned"
+            mv "${APK_PATH}.aligned" "$APK_PATH"
             "$BUILD_TOOLS_DIR/apksigner" sign \
               --ks "$STORE_FILE" \
               --ks-pass "pass:$STORE_PASS" \
               --ks-key-alias "$ALIAS_NAME" \
               --key-pass "pass:$KEY_PASS" \
               "$APK_PATH"
+            "$BUILD_TOOLS_DIR/apksigner" verify --verbose "$APK_PATH"
           fi
 
       - name: Upload Signed Release APK

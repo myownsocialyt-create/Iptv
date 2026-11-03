@@ -267,6 +267,79 @@ public class IptvAudioHelper {
         }
     }
 
+    private static WeakReference<ExoPlayer> listenerPlayerRef = null;
+
+    /**
+     * Returns true ONLY when a video is actively playing and rendered inside the open player
+     * (split-view or fullscreen) on MainActivity.
+     */
+    public static boolean canEnterPipNow(Activity activity) {
+        try {
+            if (activity == null || activity.isFinishing() || activity.isDestroyed()) {
+                return false;
+            }
+            if (!"com.example.MainActivity".equals(activity.getClass().getName())) {
+                return false;
+            }
+            ExoPlayer player = activePlayer;
+            if (player == null) {
+                return false;
+            }
+            if (!player.isPlaying() || player.getPlaybackState() != Player.STATE_READY) {
+                return false;
+            }
+            androidx.media3.common.VideoSize videoSize = player.getVideoSize();
+            if (videoSize == null || videoSize.width <= 0 || videoSize.height <= 0) {
+                return false;
+            }
+            if (activity instanceof androidx.lifecycle.ViewModelStoreOwner) {
+                androidx.lifecycle.ViewModelProvider vmp =
+                    new androidx.lifecycle.ViewModelProvider((androidx.lifecycle.ViewModelStoreOwner) activity);
+                Class<?> vmClass = Class.forName("com.example.ui.viewmodel.IptvViewModel");
+                @SuppressWarnings({"unchecked", "rawtypes"})
+                androidx.lifecycle.ViewModel vm = vmp.get((Class) vmClass);
+                if (vm == null) return false;
+
+                Object uiStateFlow = vmClass.getMethod("getUiState").invoke(vm);
+                if (uiStateFlow == null) return false;
+                Object uiState = uiStateFlow.getClass().getMethod("getValue").invoke(uiStateFlow);
+                if (uiState == null) return false;
+
+                Class<?> uiStateClass = uiState.getClass();
+                Object activeChannel = uiStateClass.getMethod("getActiveChannel").invoke(uiState);
+                if (activeChannel == null) return false;
+
+                Boolean isSplitView = (Boolean) uiStateClass.getMethod("isSplitViewMode").invoke(uiState);
+                Boolean isFullscreen = (Boolean) uiStateClass.getMethod("isFullscreen").invoke(uiState);
+                boolean playerUiOpen = (isSplitView != null && isSplitView.booleanValue())
+                    || (isFullscreen != null && isFullscreen.booleanValue());
+                if (!playerUiOpen) {
+                    return false;
+                }
+
+                Object pm = vmClass.getMethod("getPlayerManager").invoke(vm);
+                if (pm == null) return false;
+                Object isPlayingFlow = pm.getClass().getMethod("isPlaying").invoke(pm);
+                if (isPlayingFlow == null) return false;
+                Boolean isPlayingVal = (Boolean) isPlayingFlow.getClass().getMethod("getValue").invoke(isPlayingFlow);
+                if (isPlayingVal == null || !isPlayingVal.booleanValue()) {
+                    return false;
+                }
+                return true;
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "canEnterPipNow check failed: " + t.getMessage());
+        }
+        return false;
+    }
+
+    public static void applySafePipParams(Activity activity, boolean requestedCanEnter) {
+        if (activity == null) return;
+        boolean safeCanEnter = requestedCanEnter && canEnterPipNow(activity);
+        boolean isPlaying = activePlayer != null && activePlayer.isPlaying();
+        updatePipActionsInternal(activity, isPlaying, safeCanEnter);
+    }
+
     /**
      * Re-enables audio track when playing a new channel and sets up native PiP actions.
      */
@@ -284,18 +357,28 @@ public class IptvAudioHelper {
         ensureAppHooks();
 
         try {
-            player.addListener(new Player.Listener() {
-                @Override
-                public void onIsPlayingChanged(boolean isPlaying) {
-                    updatePipUi(isPlaying);
-                }
+            ExoPlayer prev = listenerPlayerRef != null ? listenerPlayerRef.get() : null;
+            if (prev != player) {
+                listenerPlayerRef = new WeakReference<ExoPlayer>(player);
+                player.addListener(new Player.Listener() {
+                    @Override
+                    public void onIsPlayingChanged(boolean isPlaying) {
+                        updatePipUi(isPlaying);
+                    }
 
-                @Override
-                public void onPlaybackStateChanged(int playbackState) {
-                    boolean playing = player.isPlaying();
-                    updatePipUi(playing);
-                }
-            });
+                    @Override
+                    public void onPlaybackStateChanged(int playbackState) {
+                        boolean playing = player.isPlaying();
+                        updatePipUi(playing);
+                    }
+
+                    @Override
+                    public void onVideoSizeChanged(androidx.media3.common.VideoSize videoSize) {
+                        boolean playing = player.isPlaying();
+                        updatePipUi(playing);
+                    }
+                });
+            }
         } catch (Throwable t) {
             Log.w(TAG, "Failed to attach Player.Listener: " + t.getMessage());
         }
@@ -319,6 +402,7 @@ public class IptvAudioHelper {
                         installSafeFiamImageLoader();
                         registerPipReceiver(activity.getApplicationContext());
                         attachPipLayoutListener(activity);
+                        applySafePipParams(activity, false);
                     }
 
                     @Override
@@ -338,7 +422,11 @@ public class IptvAudioHelper {
                     @Override
                     public void onActivityPaused(Activity activity) {
                         activeActivityRef = new WeakReference<Activity>(activity);
-                        schedulePipParamsRefresh();
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && activity.isInPictureInPictureMode()) {
+                            schedulePipParamsRefresh();
+                        } else {
+                            applySafePipParams(activity, canEnterPipNow(activity));
+                        }
                     }
 
                     @Override
@@ -504,9 +592,52 @@ public class IptvAudioHelper {
         return bmp;
     }
 
+    private static volatile boolean lastAppliedAutoEnter = false;
+
+    private static final Runnable pipStateWatchdog = new Runnable() {
+        @Override
+        public void run() {
+            mainHandler.removeCallbacks(this);
+            if (!lastAppliedAutoEnter) return;
+            Activity activity = activeActivityRef != null ? activeActivityRef.get() : null;
+            if (activity != null && !activity.isFinishing() && !activity.isDestroyed()) {
+                if (!canEnterPipNow(activity)) {
+                    boolean playing = activePlayer != null && activePlayer.isPlaying();
+                    updatePipActionsInternal(activity, playing, false);
+                    return;
+                }
+                mainHandler.postDelayed(this, 200);
+            } else {
+                lastAppliedAutoEnter = false;
+            }
+        }
+    };
+
     private static void updatePipActions(Activity activity, boolean isPlaying) {
+        boolean canEnter = isPlaying && canEnterPipNow(activity);
+        updatePipActionsInternal(activity, isPlaying, canEnter);
+    }
+
+    private static void updatePipActionsInternal(Activity activity, boolean isPlaying, boolean canEnterPip) {
         if (activity == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
+        if (!"com.example.MainActivity".equals(activity.getClass().getName())) return;
         try {
+            boolean inPipNow = activity.isInPictureInPictureMode();
+            if (!canEnterPip && !inPipNow) {
+                mainHandler.removeCallbacks(pipStateWatchdog);
+                if (lastAppliedAutoEnter) {
+                    lastAppliedAutoEnter = false;
+                    if (Build.VERSION.SDK_INT >= 31) {
+                        PictureInPictureParams.Builder clearBuilder = new PictureInPictureParams.Builder();
+                        clearBuilder.setActions(new ArrayList<RemoteAction>());
+                        clearBuilder.setAutoEnterEnabled(false);
+                        clearBuilder.setSeamlessResizeEnabled(false);
+                        activity.setPictureInPictureParams(clearBuilder.build());
+                    }
+                }
+                return;
+            }
+
             PictureInPictureParams.Builder builder = new PictureInPictureParams.Builder();
             builder.setAspectRatio(new Rational(16, 9));
 
@@ -526,9 +657,13 @@ public class IptvAudioHelper {
             builder.setActions(actions);
 
             if (Build.VERSION.SDK_INT >= 31) {
-                boolean canEnter = activePlayer != null;
-                builder.setAutoEnterEnabled(canEnter);
-                builder.setSeamlessResizeEnabled(canEnter);
+                builder.setAutoEnterEnabled(canEnterPip);
+                builder.setSeamlessResizeEnabled(canEnterPip);
+            }
+            lastAppliedAutoEnter = canEnterPip;
+            if (canEnterPip) {
+                mainHandler.removeCallbacks(pipStateWatchdog);
+                mainHandler.postDelayed(pipStateWatchdog, 200);
             }
 
             activity.setPictureInPictureParams(builder.build());
