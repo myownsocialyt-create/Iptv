@@ -88,7 +88,7 @@
         <!-- Google Play Billing Library Version for Play Console One-Time / In-App Products -->
         <meta-data
             android:name="com.google.android.play.billingclient.version"
-            android:value="7.1.1" />
+            android:value="8.0.0" />
 
         <!-- Google AdMob Application ID (Official Sample/Test ID) -->
         <meta-data
