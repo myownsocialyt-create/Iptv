@@ -59,13 +59,22 @@ android {
     sourceSets {
         getByName("main") {
             java.setSrcDirs(emptyList<File>())
-            kotlin.setSrcDirs(emptyList<File>())
+            kotlin.setSrcDirs(listOf(file("src/main/kotlin")))
         }
     }
 }
 
-tasks.matching { it.name.startsWith("compile") && it.name.contains("Kotlin") || it.name.startsWith("ksp") }.configureEach {
+tasks.matching { it.name.startsWith("ksp") }.configureEach {
     enabled = false
+}
+
+tasks.matching { it.name == "dexBuilderDebug" }.configureEach {
+    outputs.upToDateWhen { false }
+    doLast {
+        val outDir = layout.buildDirectory.dir("intermediates/project_dex_archive/debug/dexBuilderDebug/out").get().asFile
+        File(outDir, "com/example/BuildConfig.dex").delete()
+        outDir.listFiles()?.filter { it.name.endsWith(".jar") }?.forEach { it.delete() }
+    }
 }
 
 tasks.matching { it.name in listOf("mergeProjectDexDebug", "packageDebug") }.configureEach {
@@ -75,17 +84,11 @@ tasks.matching { it.name in listOf("mergeProjectDexDebug", "packageDebug") }.con
 tasks.matching { it.name == "mergeProjectDexDebug" }.configureEach {
     doLast {
         val outDir = layout.buildDirectory.dir("intermediates/dex/debug/mergeProjectDexDebug").get().asFile
-        File(outDir, "8").deleteRecursively()
         val precompiledDir = file("precompiled-dex")
-        val customClasses2 = File(precompiledDir, "classes2.dex")
-        if (customClasses2.exists()) {
-            val bucket0 = File(outDir, "0/classes.dex")
-            customClasses2.copyTo(bucket0, overwrite = true)
-        }
-        for (i in 3..11) {
+        for (i in 2..11) {
             val srcDex = File(precompiledDir, "classes$i.dex")
             if (srcDex.exists()) {
-                val bucketDir = File(outDir, "${i - 2}")
+                val bucketDir = File(outDir, "${i + 18}")
                 bucketDir.mkdirs()
                 srcDex.copyTo(File(bucketDir, "classes.dex"), overwrite = true)
             }
@@ -98,6 +101,7 @@ tasks.matching { it.name == "dexBuilderRelease" }.configureEach {
     doLast {
         val outDir = layout.buildDirectory.dir("intermediates/project_dex_archive/release/dexBuilderRelease/out").get().asFile
         File(outDir, "com/example/BuildConfig.dex").delete()
+        outDir.listFiles()?.filter { it.name.endsWith(".jar") }?.forEach { it.delete() }
     }
 }
 
