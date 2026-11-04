@@ -2,6 +2,8 @@ package com.example.premium
 
 import android.app.Activity
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.widget.Toast
 import androidx.compose.runtime.mutableStateMapOf
@@ -16,25 +18,29 @@ import com.android.billingclient.api.Purchase
 import com.android.billingclient.api.PurchasesUpdatedListener
 import com.android.billingclient.api.QueryProductDetailsParams
 import com.android.billingclient.api.QueryPurchasesParams
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 
 class BillingHelper(private val context: Context) : PurchasesUpdatedListener {
 
     private val TAG = "BillingHelper"
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     private var billingClient: BillingClient? = null
-    private val productDetailsMap = mutableMapOf<String, ProductDetails>()
 
-    val priceDisplayMap = mutableStateMapOf<String, String>(
-        PremiumManager.PLAN_MONTHLY to "₹690.00/Month",
-        PremiumManager.PLAN_YEARLY to "₹2,400.00/Year",
-        PremiumManager.PLAN_LIFETIME to "₹2,600.00"
-    )
+    val priceDisplayMap = sharedPriceDisplayMap
 
     private var onPurchaseCompleteCallback: ((Boolean, String?) -> Unit)? = null
+
+    companion object {
+        private val sharedProductDetailsMap = ConcurrentHashMap<String, ProductDetails>()
+
+        val sharedPriceDisplayMap = mutableStateMapOf<String, String>(
+            PremiumManager.PLAN_MONTHLY to "₹690.00/Month",
+            PremiumManager.PLAN_YEARLY to "₹2,400.00/Year",
+            PremiumManager.PLAN_LIFETIME to "₹2,600.00"
+        )
+    }
 
     init {
         setupBillingClient()
@@ -45,7 +51,7 @@ class BillingHelper(private val context: Context) : PurchasesUpdatedListener {
             .enableOneTimeProducts()
             .build()
 
-        billingClient = BillingClient.newBuilder(context)
+        billingClient = BillingClient.newBuilder(context.applicationContext)
             .setListener(this)
             .enablePendingPurchases(pendingParams)
             .build()
@@ -56,6 +62,7 @@ class BillingHelper(private val context: Context) : PurchasesUpdatedListener {
     fun connectToPlayBilling(onConnected: (() -> Unit)? = null) {
         val client = billingClient ?: return
         if (client.isReady) {
+            queryAvailableProducts()
             onConnected?.invoke()
             return
         }
@@ -64,11 +71,17 @@ class BillingHelper(private val context: Context) : PurchasesUpdatedListener {
             override fun onBillingSetupFinished(billingResult: BillingResult) {
                 if (billingResult.responseCode == BillingClient.BillingResponseCode.OK) {
                     Log.d(TAG, "Billing client successfully connected")
-                    queryAvailableProducts()
+                    queryAvailableProducts {
+                        mainHandler.post {
+                            onConnected?.invoke()
+                        }
+                    }
                     queryActivePurchases()
-                    onConnected?.invoke()
                 } else {
-                    Log.w(TAG, "Billing setup finished with code: ${billingResult.responseCode}")
+                    Log.w(TAG, "Billing setup finished with code: ${billingResult.responseCode} (${billingResult.debugMessage})")
+                    mainHandler.post {
+                        onConnected?.invoke()
+                    }
                 }
             }
 
@@ -78,50 +91,125 @@ class BillingHelper(private val context: Context) : PurchasesUpdatedListener {
         })
     }
 
-    private fun queryAvailableProducts() {
-        val client = billingClient ?: return
-        if (!client.isReady) return
+    fun queryAvailableProducts(onFinished: (() -> Unit)? = null) {
+        val client = billingClient ?: run {
+            onFinished?.invoke()
+            return
+        }
+        if (!client.isReady) {
+            onFinished?.invoke()
+            return
+        }
 
-        val products = listOf(
-            QueryProductDetailsParams.Product.newBuilder()
-                .setProductId(PremiumManager.PLAN_MONTHLY)
-                .setProductType(BillingClient.ProductType.SUBS)
-                .build(),
-            QueryProductDetailsParams.Product.newBuilder()
-                .setProductId(PremiumManager.PLAN_YEARLY)
-                .setProductType(BillingClient.ProductType.SUBS)
-                .build(),
-            QueryProductDetailsParams.Product.newBuilder()
-                .setProductId(PremiumManager.PLAN_LIFETIME)
-                .setProductType(BillingClient.ProductType.INAPP)
-                .build()
+        val allIds = listOf(
+            PremiumManager.PLAN_MONTHLY,
+            PremiumManager.PLAN_YEARLY,
+            PremiumManager.PLAN_LIFETIME
         )
 
-        val params = QueryProductDetailsParams.newBuilder()
-            .setProductList(products)
-            .build()
+        val remainingQueries = AtomicInteger(2)
+        val checkDone = {
+            if (remainingQueries.decrementAndGet() == 0) {
+                mainHandler.post {
+                    onFinished?.invoke()
+                }
+            }
+        }
 
-        client.queryProductDetailsAsync(params) { billingResult, queryProductDetailsResult ->
-            if (billingResult.responseCode == BillingClient.BillingResponseCode.OK && queryProductDetailsResult != null) {
-                val list = queryProductDetailsResult.productDetailsList
-                for (details in list) {
-                    val id = details.productId
-                    productDetailsMap[id] = details
+        // 1. Query SUBS separately (BillingClient 8.0 requires all products in a single query to have the same ProductType)
+        try {
+            val subsProducts = allIds.map { id ->
+                QueryProductDetailsParams.Product.newBuilder()
+                    .setProductId(id)
+                    .setProductType(BillingClient.ProductType.SUBS)
+                    .build()
+            }
+            val subsParams = QueryProductDetailsParams.newBuilder()
+                .setProductList(subsProducts)
+                .build()
 
-                    if (details.productType == BillingClient.ProductType.SUBS) {
-                        val pricingPhase = details.subscriptionOfferDetails?.firstOrNull()
-                            ?.pricingPhases?.pricingPhaseList?.firstOrNull()
-                        val formattedPrice = pricingPhase?.formattedPrice
-                        if (formattedPrice != null) {
-                            val suffix = if (id == PremiumManager.PLAN_MONTHLY) "/Month" else "/Year"
-                            priceDisplayMap[id] = "$formattedPrice$suffix"
-                        }
-                    } else if (details.productType == BillingClient.ProductType.INAPP) {
-                        val formattedPrice = details.oneTimePurchaseOfferDetails?.formattedPrice
-                        if (formattedPrice != null) {
-                            priceDisplayMap[id] = formattedPrice
-                        }
+            client.queryProductDetailsAsync(subsParams) { billingResult, queryResult ->
+                if (billingResult.responseCode == BillingClient.BillingResponseCode.OK && queryResult != null) {
+                    val list = queryResult.productDetailsList
+                    Log.d(TAG, "Fetched ${list.size} SUBS products from Play Console")
+                    for (details in list) {
+                        updateCachedProductDetails(details)
                     }
+                } else {
+                    Log.w(TAG, "SUBS query response: ${billingResult.responseCode} - ${billingResult.debugMessage}")
+                }
+                checkDone()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error querying SUBS products", e)
+            checkDone()
+        }
+
+        // 2. Query INAPP separately (for lifetime_premium or any plan configured as one-time product)
+        try {
+            val inAppProducts = allIds.map { id ->
+                QueryProductDetailsParams.Product.newBuilder()
+                    .setProductId(id)
+                    .setProductType(BillingClient.ProductType.INAPP)
+                    .build()
+            }
+            val inAppParams = QueryProductDetailsParams.newBuilder()
+                .setProductList(inAppProducts)
+                .build()
+
+            client.queryProductDetailsAsync(inAppParams) { billingResult, queryResult ->
+                if (billingResult.responseCode == BillingClient.BillingResponseCode.OK && queryResult != null) {
+                    val list = queryResult.productDetailsList
+                    Log.d(TAG, "Fetched ${list.size} INAPP products from Play Console")
+                    for (details in list) {
+                        updateCachedProductDetails(details)
+                    }
+                } else {
+                    Log.w(TAG, "INAPP query response: ${billingResult.responseCode} - ${billingResult.debugMessage}")
+                }
+                checkDone()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error querying INAPP products", e)
+            checkDone()
+        }
+    }
+
+    private fun updateCachedProductDetails(details: ProductDetails) {
+        val id = details.productId
+        sharedProductDetailsMap[id] = details
+
+        if (details.productType == BillingClient.ProductType.SUBS) {
+            val phases = details.subscriptionOfferDetails
+                ?.firstOrNull()
+                ?.pricingPhases
+                ?.pricingPhaseList
+            // Prefer the recurring paid phase (priceAmountMicros > 0) so trial/intro offers don't hide the plan rate
+            val paidPhase = phases?.lastOrNull { it.priceAmountMicros > 0L }
+                ?: phases?.lastOrNull()
+                ?: phases?.firstOrNull()
+            val formattedPrice = paidPhase?.formattedPrice
+            if (!formattedPrice.isNullOrBlank()) {
+                val suffix = when (id) {
+                    PremiumManager.PLAN_MONTHLY -> "/Month"
+                    PremiumManager.PLAN_YEARLY -> "/Year"
+                    else -> ""
+                }
+                mainHandler.post {
+                    sharedPriceDisplayMap[id] = "$formattedPrice$suffix"
+                }
+            }
+        } else if (details.productType == BillingClient.ProductType.INAPP) {
+            val formattedPrice = details.oneTimePurchaseOfferDetails?.formattedPrice
+                ?: details.oneTimePurchaseOfferDetailsList?.firstOrNull()?.formattedPrice
+            if (!formattedPrice.isNullOrBlank()) {
+                val suffix = when (id) {
+                    PremiumManager.PLAN_MONTHLY -> "/Month"
+                    PremiumManager.PLAN_YEARLY -> "/Year"
+                    else -> ""
+                }
+                mainHandler.post {
+                    sharedPriceDisplayMap[id] = "$formattedPrice$suffix"
                 }
             }
         }
@@ -171,10 +259,9 @@ class BillingHelper(private val context: Context) : PurchasesUpdatedListener {
                     }
                 }
 
-                if (!isAnyActive && PremiumManager.isPremium(context)) {
-                    // Retain existing local premium if set manually or already active
+                mainHandler.post {
+                    onFinished?.invoke(isAnyActive)
                 }
-                onFinished?.invoke(isAnyActive)
             }
         }
     }
@@ -189,38 +276,79 @@ class BillingHelper(private val context: Context) : PurchasesUpdatedListener {
 
         if (client == null || !client.isReady) {
             connectToPlayBilling {
-                launchPurchaseFlow(activity, productId, callback)
+                val readyClient = billingClient
+                if (readyClient != null && readyClient.isReady) {
+                    launchWithReadyClient(activity, readyClient, productId, callback)
+                } else {
+                    callback(false, "Unable to connect to Google Play Billing.")
+                }
             }
             return
         }
 
-        val details = productDetailsMap[productId]
-        if (details == null) {
-            // If details not loaded yet (e.g. offline or pending Play Console publishing),
-            // inform user gracefully
-            Toast.makeText(activity, "Connecting to Google Play... please retry in a moment", Toast.LENGTH_SHORT).show()
-            queryAvailableProducts()
-            callback(false, "Product details not loaded yet. Check Play Store connection.")
+        launchWithReadyClient(activity, client, productId, callback)
+    }
+
+    private fun launchWithReadyClient(
+        activity: Activity,
+        client: BillingClient,
+        productId: String,
+        callback: (Boolean, String?) -> Unit
+    ) {
+        val cachedDetails = sharedProductDetailsMap[productId]
+        if (cachedDetails == null) {
+            queryAvailableProducts {
+                val refreshedDetails = sharedProductDetailsMap[productId]
+                if (refreshedDetails != null) {
+                    startBillingFlowForDetails(activity, client, refreshedDetails, callback)
+                } else {
+                    Toast.makeText(
+                        activity,
+                        "Product ($productId) not found on Google Play yet. Please check Play Console status.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                    callback(false, "Product details not found for $productId")
+                }
+            }
             return
         }
 
-        val productDetailsParamsBuilder = BillingFlowParams.ProductDetailsParams.newBuilder()
-            .setProductDetails(details)
+        startBillingFlowForDetails(activity, client, cachedDetails, callback)
+    }
 
-        if (details.productType == BillingClient.ProductType.SUBS) {
-            val offerToken = details.subscriptionOfferDetails?.firstOrNull()?.offerToken
-            if (offerToken != null) {
-                productDetailsParamsBuilder.setOfferToken(offerToken)
+    private fun startBillingFlowForDetails(
+        activity: Activity,
+        client: BillingClient,
+        details: ProductDetails,
+        callback: (Boolean, String?) -> Unit
+    ) {
+        try {
+            val productDetailsParamsBuilder = BillingFlowParams.ProductDetailsParams.newBuilder()
+                .setProductDetails(details)
+
+            if (details.productType == BillingClient.ProductType.SUBS) {
+                val offerToken = details.subscriptionOfferDetails?.firstOrNull()?.offerToken
+                if (!offerToken.isNullOrEmpty()) {
+                    productDetailsParamsBuilder.setOfferToken(offerToken)
+                }
+            } else if (details.productType == BillingClient.ProductType.INAPP) {
+                val offerToken = details.oneTimePurchaseOfferDetailsList?.firstOrNull()?.offerToken
+                if (!offerToken.isNullOrEmpty()) {
+                    productDetailsParamsBuilder.setOfferToken(offerToken)
+                }
             }
-        }
 
-        val flowParams = BillingFlowParams.newBuilder()
-            .setProductDetailsParamsList(listOf(productDetailsParamsBuilder.build()))
-            .build()
+            val flowParams = BillingFlowParams.newBuilder()
+                .setProductDetailsParamsList(listOf(productDetailsParamsBuilder.build()))
+                .build()
 
-        val result = client.launchBillingFlow(activity, flowParams)
-        if (result.responseCode != BillingClient.BillingResponseCode.OK) {
-            callback(false, result.debugMessage)
+            val result = client.launchBillingFlow(activity, flowParams)
+            if (result.responseCode != BillingClient.BillingResponseCode.OK) {
+                callback(false, result.debugMessage)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error launching billing flow", e)
+            callback(false, e.localizedMessage)
         }
     }
 
@@ -229,11 +357,17 @@ class BillingHelper(private val context: Context) : PurchasesUpdatedListener {
             for (purchase in purchases) {
                 handlePurchase(purchase)
             }
-            onPurchaseCompleteCallback?.invoke(true, null)
+            mainHandler.post {
+                onPurchaseCompleteCallback?.invoke(true, null)
+            }
         } else if (billingResult.responseCode == BillingClient.BillingResponseCode.USER_CANCELED) {
-            onPurchaseCompleteCallback?.invoke(false, "User canceled")
+            mainHandler.post {
+                onPurchaseCompleteCallback?.invoke(false, "User canceled")
+            }
         } else {
-            onPurchaseCompleteCallback?.invoke(false, billingResult.debugMessage)
+            mainHandler.post {
+                onPurchaseCompleteCallback?.invoke(false, billingResult.debugMessage)
+            }
         }
     }
 
