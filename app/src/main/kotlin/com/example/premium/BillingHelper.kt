@@ -5,8 +5,6 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
-import android.widget.Toast
-import androidx.compose.runtime.mutableStateMapOf
 import com.android.billingclient.api.AcknowledgePurchaseParams
 import com.android.billingclient.api.BillingClient
 import com.android.billingclient.api.BillingClientStateListener
@@ -18,6 +16,7 @@ import com.android.billingclient.api.Purchase
 import com.android.billingclient.api.PurchasesUpdatedListener
 import com.android.billingclient.api.QueryProductDetailsParams
 import com.android.billingclient.api.QueryPurchasesParams
+import androidx.compose.runtime.mutableStateMapOf
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -25,8 +24,21 @@ class BillingHelper(private val context: Context) : PurchasesUpdatedListener {
 
     private val TAG = "BillingHelper"
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val appContext: Context = context.applicationContext
 
     private var billingClient: BillingClient? = null
+
+    @Volatile
+    private var isConnecting: Boolean = false
+    private val connectLock = Any()
+    private val pendingConnectCallbacks = mutableListOf<() -> Unit>()
+
+    @Volatile
+    private var activeSubProductId: String? = null
+    @Volatile
+    private var activeSubPurchaseToken: String? = null
+    @Volatile
+    private var hasCheckedActiveSubscription: Boolean = false
 
     val priceDisplayMap = sharedPriceDisplayMap
 
@@ -36,9 +48,9 @@ class BillingHelper(private val context: Context) : PurchasesUpdatedListener {
         private val sharedProductDetailsMap = ConcurrentHashMap<String, ProductDetails>()
 
         val sharedPriceDisplayMap = mutableStateMapOf<String, String>(
-            PremiumManager.PLAN_MONTHLY to "₹690.00/Month",
-            PremiumManager.PLAN_YEARLY to "₹2,400.00/Year",
-            PremiumManager.PLAN_LIFETIME to "₹2,600.00"
+            PremiumManager.PLAN_MONTHLY to "₹99.00/Month",
+            PremiumManager.PLAN_YEARLY to "₹599.00/Year",
+            PremiumManager.PLAN_LIFETIME to "₹1,499.00"
         )
     }
 
@@ -51,7 +63,7 @@ class BillingHelper(private val context: Context) : PurchasesUpdatedListener {
             .enableOneTimeProducts()
             .build()
 
-        billingClient = BillingClient.newBuilder(context.applicationContext)
+        billingClient = BillingClient.newBuilder(appContext)
             .setListener(this)
             .enablePendingPurchases(pendingParams)
             .build()
@@ -60,65 +72,110 @@ class BillingHelper(private val context: Context) : PurchasesUpdatedListener {
     }
 
     fun connectToPlayBilling(onConnected: (() -> Unit)? = null) {
-        val client = billingClient ?: return
-        if (client.isReady) {
-            queryAvailableProducts()
-            onConnected?.invoke()
+        val client = billingClient ?: run {
+            if (onConnected != null) {
+                mainHandler.post { onConnected.invoke() }
+            }
             return
+        }
+
+        if (client.isReady) {
+            if (onConnected != null) {
+                mainHandler.post { onConnected.invoke() }
+            }
+            return
+        }
+
+        synchronized(connectLock) {
+            if (onConnected != null) {
+                pendingConnectCallbacks.add(onConnected)
+            }
+            if (isConnecting) {
+                return
+            }
+            isConnecting = true
         }
 
         client.startConnection(object : BillingClientStateListener {
             override fun onBillingSetupFinished(billingResult: BillingResult) {
+                val callbacksToRun: List<() -> Unit>
+                synchronized(connectLock) {
+                    isConnecting = false
+                    callbacksToRun = pendingConnectCallbacks.toList()
+                    pendingConnectCallbacks.clear()
+                }
+
                 if (billingResult.responseCode == BillingClient.BillingResponseCode.OK) {
                     Log.d(TAG, "Billing client successfully connected")
-                    queryAvailableProducts {
+                    queryAvailableProducts()
+                    // Only auto-run queryActivePurchases if no explicit caller callback is queued,
+                    // avoiding duplicate queryActivePurchases calls on the same connection.
+                    if (callbacksToRun.isEmpty()) {
+                        queryActivePurchases()
+                    } else {
                         mainHandler.post {
-                            onConnected?.invoke()
+                            for (cb in callbacksToRun) {
+                                cb.invoke()
+                            }
                         }
                     }
-                    queryActivePurchases()
                 } else {
-                    Log.w(TAG, "Billing setup finished with code: ${billingResult.responseCode} (${billingResult.debugMessage})")
-                    mainHandler.post {
-                        onConnected?.invoke()
+                    Log.w(
+                        TAG,
+                        "Billing setup finished with code: ${billingResult.responseCode} (${billingResult.debugMessage})"
+                    )
+                    if (callbacksToRun.isNotEmpty()) {
+                        mainHandler.post {
+                            for (cb in callbacksToRun) {
+                                cb.invoke()
+                            }
+                        }
                     }
                 }
             }
 
             override fun onBillingServiceDisconnected() {
-                Log.w(TAG, "Billing service disconnected, will retry later")
+                synchronized(connectLock) {
+                    isConnecting = false
+                }
+                hasCheckedActiveSubscription = false
+                Log.w(TAG, "Billing service disconnected; will reconnect lazily on next request")
             }
         })
     }
 
     fun queryAvailableProducts(onFinished: (() -> Unit)? = null) {
         val client = billingClient ?: run {
-            onFinished?.invoke()
+            if (onFinished != null) {
+                mainHandler.post { onFinished.invoke() }
+            }
             return
         }
         if (!client.isReady) {
-            onFinished?.invoke()
+            if (onFinished != null) {
+                mainHandler.post { onFinished.invoke() }
+            }
             return
         }
-
-        val allIds = listOf(
-            PremiumManager.PLAN_MONTHLY,
-            PremiumManager.PLAN_YEARLY,
-            PremiumManager.PLAN_LIFETIME
-        )
 
         val remainingQueries = AtomicInteger(2)
         val checkDone = {
             if (remainingQueries.decrementAndGet() == 0) {
-                mainHandler.post {
-                    onFinished?.invoke()
+                if (onFinished != null) {
+                    mainHandler.post {
+                        onFinished.invoke()
+                    }
                 }
             }
         }
 
-        // 1. Query SUBS separately (BillingClient 8.0 requires all products in a single query to have the same ProductType)
+        // 1. Query SUBS products (monthly_premium, yearly_premium)
         try {
-            val subsProducts = allIds.map { id ->
+            val subsIds = listOf(
+                PremiumManager.PLAN_MONTHLY,
+                PremiumManager.PLAN_YEARLY
+            )
+            val subsProducts = subsIds.map { id ->
                 QueryProductDetailsParams.Product.newBuilder()
                     .setProductId(id)
                     .setProductType(BillingClient.ProductType.SUBS)
@@ -145,14 +202,14 @@ class BillingHelper(private val context: Context) : PurchasesUpdatedListener {
             checkDone()
         }
 
-        // 2. Query INAPP separately (for lifetime_premium or any plan configured as one-time product)
+        // 2. Query INAPP product (lifetime_premium)
         try {
-            val inAppProducts = allIds.map { id ->
+            val inAppProducts = listOf(
                 QueryProductDetailsParams.Product.newBuilder()
-                    .setProductId(id)
+                    .setProductId(PremiumManager.PLAN_LIFETIME)
                     .setProductType(BillingClient.ProductType.INAPP)
                     .build()
-            }
+            )
             val inAppParams = QueryProductDetailsParams.newBuilder()
                 .setProductList(inAppProducts)
                 .build()
@@ -175,16 +232,18 @@ class BillingHelper(private val context: Context) : PurchasesUpdatedListener {
         }
     }
 
+    private fun pickOffer(details: ProductDetails): ProductDetails.SubscriptionOfferDetails? {
+        val offers = details.subscriptionOfferDetails ?: return null
+        return offers.firstOrNull { it.offerId == null } ?: offers.firstOrNull()
+    }
+
     private fun updateCachedProductDetails(details: ProductDetails) {
         val id = details.productId
         sharedProductDetailsMap[id] = details
 
         if (details.productType == BillingClient.ProductType.SUBS) {
-            val phases = details.subscriptionOfferDetails
-                ?.firstOrNull()
-                ?.pricingPhases
-                ?.pricingPhaseList
-            // Prefer the recurring paid phase (priceAmountMicros > 0) so trial/intro offers don't hide the plan rate
+            val selectedOffer = pickOffer(details)
+            val phases = selectedOffer?.pricingPhases?.pricingPhaseList
             val paidPhase = phases?.lastOrNull { it.priceAmountMicros > 0L }
                 ?: phases?.lastOrNull()
                 ?: phases?.firstOrNull()
@@ -203,13 +262,8 @@ class BillingHelper(private val context: Context) : PurchasesUpdatedListener {
             val formattedPrice = details.oneTimePurchaseOfferDetails?.formattedPrice
                 ?: details.oneTimePurchaseOfferDetailsList?.firstOrNull()?.formattedPrice
             if (!formattedPrice.isNullOrBlank()) {
-                val suffix = when (id) {
-                    PremiumManager.PLAN_MONTHLY -> "/Month"
-                    PremiumManager.PLAN_YEARLY -> "/Year"
-                    else -> ""
-                }
                 mainHandler.post {
-                    sharedPriceDisplayMap[id] = "$formattedPrice$suffix"
+                    sharedPriceDisplayMap[id] = formattedPrice
                 }
             }
         }
@@ -217,49 +271,76 @@ class BillingHelper(private val context: Context) : PurchasesUpdatedListener {
 
     fun queryActivePurchases(onFinished: ((Boolean) -> Unit)? = null) {
         val client = billingClient ?: run {
-            onFinished?.invoke(false)
+            if (onFinished != null) {
+                mainHandler.post { onFinished.invoke(false) }
+            }
             return
         }
         if (!client.isReady) {
             connectToPlayBilling {
-                queryActivePurchases(onFinished)
+                if (billingClient?.isReady == true) {
+                    queryActivePurchases(onFinished)
+                } else {
+                    if (onFinished != null) {
+                        mainHandler.post { onFinished.invoke(false) }
+                    }
+                }
             }
             return
         }
 
-        var isAnyActive = false
-
-        // Check Subscriptions
         val subParams = QueryPurchasesParams.newBuilder()
             .setProductType(BillingClient.ProductType.SUBS)
             .build()
 
         client.queryPurchasesAsync(subParams) { subResult, subPurchases ->
-            if (subResult.responseCode == BillingClient.BillingResponseCode.OK) {
+            val subOk = subResult.responseCode == BillingClient.BillingResponseCode.OK
+            var foundPurchasedSub: Purchase? = null
+
+            if (subOk) {
                 for (purchase in subPurchases) {
                     if (purchase.purchaseState == Purchase.PurchaseState.PURCHASED) {
-                        isAnyActive = true
+                        if (foundPurchasedSub == null) {
+                            foundPurchasedSub = purchase
+                        }
                         handlePurchase(purchase)
                     }
                 }
+                if (foundPurchasedSub != null) {
+                    activeSubProductId = foundPurchasedSub.products.firstOrNull()
+                    activeSubPurchaseToken = foundPurchasedSub.purchaseToken
+                } else {
+                    activeSubProductId = null
+                    activeSubPurchaseToken = null
+                }
+                hasCheckedActiveSubscription = true
             }
 
-            // Check In-App (Lifetime)
             val inAppParams = QueryPurchasesParams.newBuilder()
                 .setProductType(BillingClient.ProductType.INAPP)
                 .build()
 
             client.queryPurchasesAsync(inAppParams) { inAppResult, inAppPurchases ->
-                if (inAppResult.responseCode == BillingClient.BillingResponseCode.OK) {
+                val inAppOk = inAppResult.responseCode == BillingClient.BillingResponseCode.OK
+                var foundPurchasedInApp: Purchase? = null
+
+                if (inAppOk) {
                     for (purchase in inAppPurchases) {
                         if (purchase.purchaseState == Purchase.PurchaseState.PURCHASED) {
-                            isAnyActive = true
+                            if (foundPurchasedInApp == null) {
+                                foundPurchasedInApp = purchase
+                            }
                             handlePurchase(purchase)
                         }
                     }
                 }
 
+                val isAnyActive = (foundPurchasedSub != null) || (foundPurchasedInApp != null)
+
                 mainHandler.post {
+                    if (subOk && inAppOk && !isAnyActive) {
+                        PremiumManager.setPremium(appContext, false, "")
+                    }
                     onFinished?.invoke(isAnyActive)
                 }
             }
@@ -280,7 +361,9 @@ class BillingHelper(private val context: Context) : PurchasesUpdatedListener {
                 if (readyClient != null && readyClient.isReady) {
                     launchWithReadyClient(activity, readyClient, productId, callback)
                 } else {
-                    callback(false, "Unable to connect to Google Play Billing.")
+                    mainHandler.post {
+                        callback(false, "Unable to connect to Google Play Billing.")
+                    }
                 }
             }
             return
@@ -295,25 +378,32 @@ class BillingHelper(private val context: Context) : PurchasesUpdatedListener {
         productId: String,
         callback: (Boolean, String?) -> Unit
     ) {
+        val proceedWithDetails = { details: ProductDetails ->
+            if (!hasCheckedActiveSubscription) {
+                queryActivePurchases {
+                    startBillingFlowForDetails(activity, client, details, callback)
+                }
+            } else {
+                startBillingFlowForDetails(activity, client, details, callback)
+            }
+        }
+
         val cachedDetails = sharedProductDetailsMap[productId]
         if (cachedDetails == null) {
             queryAvailableProducts {
                 val refreshedDetails = sharedProductDetailsMap[productId]
                 if (refreshedDetails != null) {
-                    startBillingFlowForDetails(activity, client, refreshedDetails, callback)
+                    proceedWithDetails(refreshedDetails)
                 } else {
-                    Toast.makeText(
-                        activity,
-                        "Product ($productId) not found on Google Play yet. Please check Play Console status.",
-                        Toast.LENGTH_LONG
-                    ).show()
-                    callback(false, "Product details not found for $productId")
+                    mainHandler.post {
+                        callback(false, "Product ($productId) not found on Google Play yet. Please check Play Console status.")
+                    }
                 }
             }
             return
         }
 
-        startBillingFlowForDetails(activity, client, cachedDetails, callback)
+        proceedWithDetails(cachedDetails)
     }
 
     private fun startBillingFlowForDetails(
@@ -323,14 +413,45 @@ class BillingHelper(private val context: Context) : PurchasesUpdatedListener {
         callback: (Boolean, String?) -> Unit
     ) {
         try {
+            val targetProductId = details.productId
+            val isCurrentlyPremium = PremiumManager.isPremium(appContext)
+            val currentActivePlan = PremiumManager.getActivePlan(appContext)
+
+            // Guard 1: User already has Lifetime Premium
+            if (isCurrentlyPremium && currentActivePlan == PremiumManager.PLAN_LIFETIME) {
+                val msg = if (targetProductId == PremiumManager.PLAN_LIFETIME) {
+                    "You already have this plan active."
+                } else {
+                    "You already have Lifetime Premium."
+                }
+                mainHandler.post {
+                    callback(false, msg)
+                }
+                return
+            }
+
+            // Guard 2: User already has the exact selected plan active
+            if ((isCurrentlyPremium && currentActivePlan == targetProductId) ||
+                (!activeSubProductId.isNullOrEmpty() && activeSubProductId == targetProductId)
+            ) {
+                mainHandler.post {
+                    callback(false, "You already have this plan active.")
+                }
+                return
+            }
+
             val productDetailsParamsBuilder = BillingFlowParams.ProductDetailsParams.newBuilder()
                 .setProductDetails(details)
 
             if (details.productType == BillingClient.ProductType.SUBS) {
-                val offerToken = details.subscriptionOfferDetails?.firstOrNull()?.offerToken
-                if (!offerToken.isNullOrEmpty()) {
-                    productDetailsParamsBuilder.setOfferToken(offerToken)
+                val offerToken = pickOffer(details)?.offerToken
+                if (offerToken.isNullOrEmpty()) {
+                    mainHandler.post {
+                        callback(false, "Subscription offer not available for $targetProductId.")
+                    }
+                    return
                 }
+                productDetailsParamsBuilder.setOfferToken(offerToken)
             } else if (details.productType == BillingClient.ProductType.INAPP) {
                 val offerToken = details.oneTimePurchaseOfferDetailsList?.firstOrNull()?.offerToken
                 if (!offerToken.isNullOrEmpty()) {
@@ -338,35 +459,103 @@ class BillingHelper(private val context: Context) : PurchasesUpdatedListener {
                 }
             }
 
-            val flowParams = BillingFlowParams.newBuilder()
+            val flowParamsBuilder = BillingFlowParams.newBuilder()
                 .setProductDetailsParamsList(listOf(productDetailsParamsBuilder.build()))
-                .build()
 
-            val result = client.launchBillingFlow(activity, flowParams)
+            // If purchasing a SUBS product while a DIFFERENT SUBS product is active, attach SubscriptionUpdateParams
+            if (details.productType == BillingClient.ProductType.SUBS) {
+                val oldSubId = activeSubProductId
+                val oldToken = activeSubPurchaseToken
+                if (!oldSubId.isNullOrEmpty() && oldSubId != targetProductId && !oldToken.isNullOrEmpty()) {
+                    val updateParams = BillingFlowParams.SubscriptionUpdateParams.newBuilder()
+                        .setOldPurchaseToken(oldToken)
+                        .setSubscriptionReplacementMode(
+                            BillingFlowParams.SubscriptionUpdateParams.ReplacementMode.WITH_TIME_PRORATION
+                        )
+                        .build()
+                    flowParamsBuilder.setSubscriptionUpdateParams(updateParams)
+                }
+            }
+
+            val result = client.launchBillingFlow(activity, flowParamsBuilder.build())
             if (result.responseCode != BillingClient.BillingResponseCode.OK) {
-                callback(false, result.debugMessage)
+                mainHandler.post {
+                    callback(false, result.debugMessage.ifBlank { "Unable to launch purchase flow." })
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error launching billing flow", e)
-            callback(false, e.localizedMessage)
+            mainHandler.post {
+                callback(false, e.localizedMessage ?: "Error launching billing flow.")
+            }
         }
     }
 
     override fun onPurchasesUpdated(billingResult: BillingResult, purchases: MutableList<Purchase>?) {
-        if (billingResult.responseCode == BillingClient.BillingResponseCode.OK && purchases != null) {
-            for (purchase in purchases) {
-                handlePurchase(purchase)
+        when (billingResult.responseCode) {
+            BillingClient.BillingResponseCode.OK -> {
+                var anyPurchased = false
+                var anyPending = false
+
+                if (purchases != null) {
+                    for (purchase in purchases) {
+                        when (purchase.purchaseState) {
+                            Purchase.PurchaseState.PURCHASED -> {
+                                anyPurchased = true
+                                handlePurchase(purchase)
+                            }
+                            Purchase.PurchaseState.PENDING -> {
+                                anyPending = true
+                            }
+                        }
+                    }
+                }
+
+                mainHandler.post {
+                    when {
+                        anyPurchased -> {
+                            onPurchaseCompleteCallback?.invoke(true, null)
+                        }
+                        anyPending -> {
+                            onPurchaseCompleteCallback?.invoke(
+                                false,
+                                "Payment pending. Premium will activate once the payment completes."
+                            )
+                        }
+                        else -> {
+                            onPurchaseCompleteCallback?.invoke(
+                                false,
+                                "Purchase was not completed."
+                            )
+                        }
+                    }
+                }
             }
-            mainHandler.post {
-                onPurchaseCompleteCallback?.invoke(true, null)
+
+            BillingClient.BillingResponseCode.ITEM_ALREADY_OWNED -> {
+                queryActivePurchases { active ->
+                    mainHandler.post {
+                        onPurchaseCompleteCallback?.invoke(
+                            active,
+                            if (active) null else "Item already owned but could not be verified. Try Restore Purchases."
+                        )
+                    }
+                }
             }
-        } else if (billingResult.responseCode == BillingClient.BillingResponseCode.USER_CANCELED) {
-            mainHandler.post {
-                onPurchaseCompleteCallback?.invoke(false, "User canceled")
+
+            BillingClient.BillingResponseCode.USER_CANCELED -> {
+                mainHandler.post {
+                    onPurchaseCompleteCallback?.invoke(false, "User canceled")
+                }
             }
-        } else {
-            mainHandler.post {
-                onPurchaseCompleteCallback?.invoke(false, billingResult.debugMessage)
+
+            else -> {
+                mainHandler.post {
+                    onPurchaseCompleteCallback?.invoke(
+                        false,
+                        billingResult.debugMessage.ifBlank { "Purchase failed (code ${billingResult.responseCode})." }
+                    )
+                }
             }
         }
     }
@@ -374,7 +563,26 @@ class BillingHelper(private val context: Context) : PurchasesUpdatedListener {
     private fun handlePurchase(purchase: Purchase) {
         if (purchase.purchaseState == Purchase.PurchaseState.PURCHASED) {
             val plan = purchase.products.firstOrNull() ?: PremiumManager.PLAN_LIFETIME
-            PremiumManager.setPremium(context, true, plan)
+            if (plan == PremiumManager.PLAN_MONTHLY || plan == PremiumManager.PLAN_YEARLY) {
+                activeSubProductId = plan
+                activeSubPurchaseToken = purchase.purchaseToken
+                hasCheckedActiveSubscription = true
+            }
+
+            mainHandler.post {
+                // If Lifetime is already active, do not overwrite activePlan with a lower tier subscription
+                val currentPlan = PremiumManager.getActivePlan(appContext)
+                val effectivePlan = if (
+                    PremiumManager.isPremium(appContext) &&
+                    currentPlan == PremiumManager.PLAN_LIFETIME &&
+                    plan != PremiumManager.PLAN_LIFETIME
+                ) {
+                    PremiumManager.PLAN_LIFETIME
+                } else {
+                    plan
+                }
+                PremiumManager.setPremium(appContext, true, effectivePlan)
+            }
 
             if (!purchase.isAcknowledged) {
                 val acknowledgeParams = AcknowledgePurchaseParams.newBuilder()
@@ -389,15 +597,21 @@ class BillingHelper(private val context: Context) : PurchasesUpdatedListener {
 
     fun restorePurchases(activity: Activity, onComplete: (Boolean, String) -> Unit) {
         queryActivePurchases { foundActive ->
-            if (foundActive || PremiumManager.isPremium(context)) {
-                onComplete(true, "Purchases restored successfully!")
-            } else {
-                onComplete(false, "No active subscription found on this Google account.")
+            mainHandler.post {
+                if (foundActive) {
+                    onComplete(true, "Purchases restored successfully!")
+                } else {
+                    onComplete(false, "No active subscription found on this Google account.")
+                }
             }
         }
     }
 
     fun destroy() {
+        synchronized(connectLock) {
+            isConnecting = false
+            pendingConnectCallbacks.clear()
+        }
         billingClient?.endConnection()
         billingClient = null
     }

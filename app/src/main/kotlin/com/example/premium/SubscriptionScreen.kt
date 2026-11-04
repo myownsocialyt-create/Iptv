@@ -140,12 +140,15 @@ fun SubscriptionContent(
     val context = LocalContext.current
     val activity = context as? Activity
 
+    val isPremium by PremiumManager.isPremiumState
+    val activePlan by PremiumManager.activePlanState
+
     var selectedPlan by remember { mutableStateOf(PremiumManager.PLAN_LIFETIME) }
     var isPurchasing by remember { mutableStateOf(false) }
 
-    val monthlyPrice = billingHelper.priceDisplayMap[PremiumManager.PLAN_MONTHLY] ?: "₹690.00/Month"
-    val yearlyPrice = billingHelper.priceDisplayMap[PremiumManager.PLAN_YEARLY] ?: "₹2,400.00/Year"
-    val lifetimePrice = billingHelper.priceDisplayMap[PremiumManager.PLAN_LIFETIME] ?: "₹2,600.00"
+    val monthlyPrice = billingHelper.priceDisplayMap[PremiumManager.PLAN_MONTHLY] ?: "₹99.00/Month"
+    val yearlyPrice = billingHelper.priceDisplayMap[PremiumManager.PLAN_YEARLY] ?: "₹599.00/Year"
+    val lifetimePrice = billingHelper.priceDisplayMap[PremiumManager.PLAN_LIFETIME] ?: "₹1,499.00"
 
     val scrollState = rememberScrollState()
 
@@ -310,30 +313,30 @@ fun SubscriptionContent(
                 // 1. Lifetime Plan (Highlighted with "Most Popular" badge)
                 PlanCard(
                     title = "Lifetime",
-                    subtitle = "One-time payment",
+                    subtitle = if (isPremium && activePlan == PremiumManager.PLAN_LIFETIME) "Active Plan" else "One-time payment",
                     price = lifetimePrice,
                     isSelected = selectedPlan == PremiumManager.PLAN_LIFETIME,
-                    badgeText = "Most Popular",
+                    badgeText = if (isPremium && activePlan == PremiumManager.PLAN_LIFETIME) "Active" else "Most Popular",
                     onClick = { selectedPlan = PremiumManager.PLAN_LIFETIME }
                 )
 
                 // 2. Yearly Plan
                 PlanCard(
                     title = "Yearly",
-                    subtitle = "Auto-renewable",
+                    subtitle = if (isPremium && activePlan == PremiumManager.PLAN_YEARLY) "Active Plan" else "Auto-renewable",
                     price = yearlyPrice,
                     isSelected = selectedPlan == PremiumManager.PLAN_YEARLY,
-                    badgeText = null,
+                    badgeText = if (isPremium && activePlan == PremiumManager.PLAN_YEARLY) "Active" else null,
                     onClick = { selectedPlan = PremiumManager.PLAN_YEARLY }
                 )
 
                 // 3. Monthly Plan
                 PlanCard(
                     title = "Monthly",
-                    subtitle = "Auto-renewable",
+                    subtitle = if (isPremium && activePlan == PremiumManager.PLAN_MONTHLY) "Active Plan" else "Auto-renewable",
                     price = monthlyPrice,
                     isSelected = selectedPlan == PremiumManager.PLAN_MONTHLY,
-                    badgeText = null,
+                    badgeText = if (isPremium && activePlan == PremiumManager.PLAN_MONTHLY) "Active" else null,
                     onClick = { selectedPlan = PremiumManager.PLAN_MONTHLY }
                 )
             }
@@ -343,19 +346,38 @@ fun SubscriptionContent(
             // Continue Button
             Button(
                 onClick = {
-                    if (activity != null) {
-                        isPurchasing = true
-                        billingHelper.launchPurchaseFlow(activity, selectedPlan) { success, errorMsg ->
-                            isPurchasing = false
-                            if (success) {
-                                Toast.makeText(activity, "🎉 Premium Activated!", Toast.LENGTH_LONG).show()
-                                onClose()
-                            } else if (errorMsg != null && errorMsg != "User canceled") {
-                                Toast.makeText(activity, "Notice: $errorMsg", Toast.LENGTH_SHORT).show()
-                            }
+                    if (activity == null) {
+                        isPurchasing = false
+                        Toast.makeText(context, "Unable to start purchase from this context.", Toast.LENGTH_SHORT).show()
+                        return@Button
+                    }
+
+                    if (isPremium && activePlan == PremiumManager.PLAN_LIFETIME) {
+                        isPurchasing = false
+                        val msg = if (selectedPlan == PremiumManager.PLAN_LIFETIME) {
+                            "You already have this plan active."
+                        } else {
+                            "You already have Lifetime Premium."
                         }
-                    } else {
-                        Toast.makeText(context, "Activating purchase flow...", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(activity, msg, Toast.LENGTH_SHORT).show()
+                        return@Button
+                    }
+
+                    if (isPremium && activePlan == selectedPlan) {
+                        isPurchasing = false
+                        Toast.makeText(activity, "You already have this plan active.", Toast.LENGTH_SHORT).show()
+                        return@Button
+                    }
+
+                    isPurchasing = true
+                    billingHelper.launchPurchaseFlow(activity, selectedPlan) { success, errorMsg ->
+                        isPurchasing = false
+                        if (success) {
+                            Toast.makeText(activity, "🎉 Premium Activated!", Toast.LENGTH_LONG).show()
+                            onClose()
+                        } else if (errorMsg != null && errorMsg != "User canceled") {
+                            Toast.makeText(activity, errorMsg, Toast.LENGTH_LONG).show()
+                        }
                     }
                 },
                 modifier = Modifier
@@ -381,15 +403,18 @@ fun SubscriptionContent(
             // Restore Purchases Button
             TextButton(
                 onClick = {
-                    if (activity != null) {
+                    if (activity != null && !isPurchasing) {
+                        isPurchasing = true
                         billingHelper.restorePurchases(activity) { success, msg ->
+                            isPurchasing = false
                             Toast.makeText(activity, msg, Toast.LENGTH_SHORT).show()
                             if (success) {
                                 onClose()
                             }
                         }
                     }
-                }
+                },
+                enabled = !isPurchasing
             ) {
                 Text(
                     text = "Restore Purchases",
@@ -633,7 +658,7 @@ private fun PlanCard(
             }
         }
 
-        // "Most Popular" Badge pinned to top-right
+        // Badge pinned to top-right
         if (badgeText != null) {
             Box(
                 modifier = Modifier

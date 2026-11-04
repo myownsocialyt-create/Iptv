@@ -2,6 +2,7 @@ package com.example.premium
 
 import android.app.Activity
 import android.content.Context
+import android.util.Log
 import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -38,9 +39,52 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
 
+// Do not enable minify without keep rules for reflected ViewModel/Channel getters.
 object PremiumUiHooks {
 
+    private const val TAG = "PremiumUiHooks"
+
     private var startupBillingHelper: BillingHelper? = null
+
+    @Volatile
+    private var cachedPlaylistCount: Int = -1
+
+    @Volatile
+    private var cachedFavoriteCount: Int = -1
+
+    private fun safeCall(target: Any?, methodName: String): Any? {
+        if (target == null) return null
+        val clazz = target.javaClass
+        return try {
+            val pubMethod = try {
+                clazz.getMethod(methodName)
+            } catch (_: NoSuchMethodException) {
+                null
+            }
+            if (pubMethod != null) {
+                pubMethod.invoke(target)
+            } else {
+                var currentClass: Class<*>? = clazz
+                var foundMethod: java.lang.reflect.Method? = null
+                while (currentClass != null && foundMethod == null) {
+                    foundMethod = currentClass.declaredMethods.firstOrNull {
+                        it.name == methodName && it.parameterTypes.isEmpty()
+                    }
+                    currentClass = currentClass.superclass
+                }
+                if (foundMethod != null) {
+                    foundMethod.isAccessible = true
+                    foundMethod.invoke(target)
+                } else {
+                    Log.e(TAG, "Method $methodName not found on ${clazz.name}")
+                    null
+                }
+            }
+        } catch (t: Throwable) {
+            Log.e(TAG, "safeCall failed for ${clazz.name}.$methodName", t)
+            null
+        }
+    }
 
     @JvmStatic
     fun onMainActivityCreate(activity: Activity) {
@@ -52,7 +96,7 @@ object PremiumUiHooks {
                 startupBillingHelper?.queryActivePurchases()
             }
         } catch (t: Throwable) {
-            t.printStackTrace()
+            Log.e(TAG, "Error in onMainActivityCreate", t)
         }
     }
 
@@ -90,23 +134,29 @@ object PremiumUiHooks {
             return false
         }
         try {
-            val vmClass = viewModel.javaClass
-            val currentSectionFlow = vmClass.getMethod("getCurrentSection").invoke(viewModel) as? StateFlow<*>
+            val currentSectionFlow = safeCall(viewModel, "getCurrentSection") as? StateFlow<*>
             val sectionName = currentSectionFlow?.value?.toString() ?: ""
 
-            val chClass = channel.javaClass
-            val streamUrl = chClass.getMethod("getStreamUrl").invoke(channel) as? String ?: ""
-            val channelId = chClass.getMethod("getId").invoke(channel) as? String ?: ""
+            val streamUrlObj = safeCall(channel, "getStreamUrl")
+            val channelIdObj = safeCall(channel, "getId")
+
+            if (currentSectionFlow == null && streamUrlObj == null && channelIdObj == null) {
+                Log.e(TAG, "shouldBlockPlayChannel: could not determine channel type; allowing playback")
+                return false
+            }
+
+            val streamUrl = streamUrlObj as? String ?: ""
+            val channelId = channelIdObj as? String ?: ""
 
             var isXtream = sectionName.equals("XTREAM", ignoreCase = true) ||
                 channelId.startsWith("xtream_", ignoreCase = true)
 
             if (!isXtream) {
-                val xtreamList = (vmClass.getMethod("getXtreamChannels").invoke(viewModel) as? StateFlow<*>)?.value as? Iterable<*>
+                val xtreamList = (safeCall(viewModel, "getXtreamChannels") as? StateFlow<*>)?.value as? Iterable<*>
                 if (xtreamList != null) {
                     for (item in xtreamList) {
                         if (item != null) {
-                            val itemUrl = item.javaClass.getMethod("getStreamUrl").invoke(item) as? String
+                            val itemUrl = safeCall(item, "getStreamUrl") as? String
                             if (itemUrl == streamUrl && streamUrl.isNotEmpty()) {
                                 isXtream = true
                                 break
@@ -117,11 +167,11 @@ object PremiumUiHooks {
             }
 
             if (!isXtream) {
-                val vodList = (vmClass.getMethod("getXtreamVodChannels").invoke(viewModel) as? StateFlow<*>)?.value as? Iterable<*>
+                val vodList = (safeCall(viewModel, "getXtreamVodChannels") as? StateFlow<*>)?.value as? Iterable<*>
                 if (vodList != null) {
                     for (item in vodList) {
                         if (item != null) {
-                            val itemUrl = item.javaClass.getMethod("getStreamUrl").invoke(item) as? String
+                            val itemUrl = safeCall(item, "getStreamUrl") as? String
                             if (itemUrl == streamUrl && streamUrl.isNotEmpty()) {
                                 isXtream = true
                                 break
@@ -136,7 +186,7 @@ object PremiumUiHooks {
                 return true
             }
         } catch (t: Throwable) {
-            t.printStackTrace()
+            Log.e(TAG, "Error in shouldBlockPlayChannel; allowing playback", t)
         }
         return false
     }
@@ -147,16 +197,31 @@ object PremiumUiHooks {
             return false
         }
         try {
-            val vmClass = viewModel.javaClass
-            val customFlow = vmClass.getMethod("getCustomPlaylists").invoke(viewModel) as? StateFlow<*>
+            val customFlow = safeCall(viewModel, "getCustomPlaylists") as? StateFlow<*>
             val list = customFlow?.value as? Collection<*>
-            val currentCount = list?.size ?: 0
-            if (!PremiumManager.canAddPlaylist(currentCount)) {
+            if (list != null) {
+                val currentCount = list.size
+                cachedPlaylistCount = currentCount
+                if (!PremiumManager.canAddPlaylist(currentCount)) {
+                    launchPaywall()
+                    return true
+                }
+                return false
+            } else {
+                Log.e(TAG, "shouldBlockAddPlaylist: failed to read customPlaylists via reflection")
+            }
+        } catch (t: Throwable) {
+            Log.e(TAG, "Error in shouldBlockAddPlaylist", t)
+        }
+
+        val fallbackCount = cachedPlaylistCount
+        if (fallbackCount >= 0) {
+            if (!PremiumManager.canAddPlaylist(fallbackCount)) {
                 launchPaywall()
                 return true
             }
-        } catch (t: Throwable) {
-            t.printStackTrace()
+        } else {
+            Log.e(TAG, "shouldBlockAddPlaylist: no cached playlist count available; allowing action")
         }
         return false
     }
@@ -167,31 +232,47 @@ object PremiumUiHooks {
             return false
         }
         try {
-            val vmClass = viewModel.javaClass
-            val favFlow = vmClass.getMethod("getFavorites").invoke(viewModel) as? StateFlow<*>
-            val favList = favFlow?.value as? Collection<*> ?: emptyList<Any>()
+            val favFlow = safeCall(viewModel, "getFavorites") as? StateFlow<*>
+            val favList = favFlow?.value as? Collection<*>
+            if (favList != null) {
+                cachedFavoriteCount = favList.size
 
-            val chClass = channel.javaClass
-            val targetUrl = chClass.getMethod("getStreamUrl").invoke(channel) as? String ?: ""
-            val targetId = chClass.getMethod("getId").invoke(channel) as? String ?: ""
+                val targetUrl = safeCall(channel, "getStreamUrl") as? String ?: ""
+                val targetId = safeCall(channel, "getId") as? String ?: ""
 
-            // Check if already favorite (removing is always allowed)
-            for (item in favList) {
-                if (item != null) {
-                    val itemUrl = item.javaClass.getMethod("getStreamUrl").invoke(item) as? String ?: ""
-                    val itemId = item.javaClass.getMethod("getId").invoke(item) as? String ?: ""
-                    if ((targetUrl.isNotEmpty() && targetUrl == itemUrl) || (targetId.isNotEmpty() && targetId == itemId)) {
-                        return false
+                // Check if already favorite (removing is always allowed)
+                for (item in favList) {
+                    if (item != null) {
+                        val itemUrl = safeCall(item, "getStreamUrl") as? String ?: ""
+                        val itemId = safeCall(item, "getId") as? String ?: ""
+                        if ((targetUrl.isNotEmpty() && targetUrl == itemUrl) ||
+                            (targetId.isNotEmpty() && targetId == itemId)
+                        ) {
+                            return false
+                        }
                     }
                 }
-            }
 
-            if (!PremiumManager.canAddFavorite(favList.size)) {
+                if (!PremiumManager.canAddFavorite(favList.size)) {
+                    launchPaywall()
+                    return true
+                }
+                return false
+            } else {
+                Log.e(TAG, "shouldBlockToggleFavorite: failed to read favorites via reflection")
+            }
+        } catch (t: Throwable) {
+            Log.e(TAG, "Error in shouldBlockToggleFavorite", t)
+        }
+
+        val fallbackCount = cachedFavoriteCount
+        if (fallbackCount >= 0) {
+            if (!PremiumManager.canAddFavorite(fallbackCount)) {
                 launchPaywall()
                 return true
             }
-        } catch (t: Throwable) {
-            t.printStackTrace()
+        } else {
+            Log.e(TAG, "shouldBlockToggleFavorite: no cached favorite count available; allowing action")
         }
         return false
     }
@@ -227,7 +308,6 @@ object PremiumUiHooks {
                     if (!isPremium) {
                         SubscriptionActivity.start(context)
                     } else if (activePlan != PremiumManager.PLAN_LIFETIME) {
-                        // Allow plan upgrade for monthly/yearly users
                         SubscriptionActivity.start(context)
                     } else {
                         Toast.makeText(context, "👑 Lifetime Premium Active!", Toast.LENGTH_SHORT).show()
