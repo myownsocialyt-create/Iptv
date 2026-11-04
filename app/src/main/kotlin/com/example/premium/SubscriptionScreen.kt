@@ -439,7 +439,7 @@ fun SubscriptionContent(
                         try {
                             val intent = Intent(
                                 Intent.ACTION_VIEW,
-                                Uri.parse("https://sites.google.com/view/hypnotix-iptv-privacy")
+                                Uri.parse("https://datashield-cloud.github.io/privacy-policy/Hypnotix/")
                             )
                             context.startActivity(intent)
                         } catch (e: Exception) {
@@ -460,7 +460,7 @@ fun SubscriptionContent(
                         try {
                             val intent = Intent(
                                 Intent.ACTION_VIEW,
-                                Uri.parse("https://sites.google.com/view/hypnotix-iptv-terms")
+                                Uri.parse("https://datashield-cloud.github.io/privacy-policy/Hypnotix/")
                             )
                             context.startActivity(intent)
                         } catch (e: Exception) {
