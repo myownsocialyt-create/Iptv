@@ -5,6 +5,7 @@ import android.app.Application
 import android.app.Dialog
 import android.content.Context
 import android.content.ContextWrapper
+import android.content.res.Configuration
 import android.database.sqlite.SQLiteDatabase
 import android.graphics.Color as AndroidColor
 import android.graphics.Typeface
@@ -57,10 +58,14 @@ import androidx.room.RoomDatabase
 import java.lang.ref.WeakReference
 import java.util.Collections
 import java.util.WeakHashMap
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
@@ -71,6 +76,7 @@ object PremiumUiHooks {
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val hookScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private var startupBillingHelper: BillingHelper? = null
 
@@ -81,11 +87,27 @@ object PremiumUiHooks {
     private var currentActivityRef: WeakReference<Activity>? = null
 
     @Volatile
+    private var lastKnownViewModelRef: WeakReference<Any>? = null
+
+    @Volatile
+    private var cachedRoomDbRef: WeakReference<RoomDatabase>? = null
+
+    @Volatile
     private var lifecycleRegistered: Boolean = false
 
     private var activeLimitDialogRef: WeakReference<Dialog>? = null
 
     private val observedViewModels = Collections.newSetFromMap(WeakHashMap<Any, Boolean>())
+
+    private val customChannelsCache = ConcurrentHashMap<Long, List<Any>>()
+    private val customPlaylistUrls = ConcurrentHashMap<Long, String>()
+    private val customPlaylistJobs = ConcurrentHashMap<Long, Job>()
+
+    @Volatile
+    private var latestCustomEntities: List<Any> = emptyList()
+
+    @Volatile
+    private var channelCopyDefaultMethod: java.lang.reflect.Method? = null
 
     private val stateLock = Any()
 
@@ -143,6 +165,23 @@ object PremiumUiHooks {
         }
     }
 
+    private fun safeGetField(target: Any?, fieldName: String): Any? {
+        if (target == null) return null
+        var currentClass: Class<*>? = target.javaClass
+        while (currentClass != null) {
+            try {
+                val field = currentClass.getDeclaredField(fieldName)
+                field.isAccessible = true
+                return field.get(target)
+            } catch (_: NoSuchFieldException) {
+                currentClass = currentClass.superclass
+            } catch (t: Throwable) {
+                return null
+            }
+        }
+        return null
+    }
+
     private fun unwrapActivity(context: Context?): Activity? {
         var ctx = context
         while (ctx is ContextWrapper) {
@@ -184,6 +223,14 @@ object PremiumUiHooks {
                 override fun onActivityResumed(act: Activity) {
                     if (act !is SubscriptionActivity) {
                         currentActivityRef = WeakReference(act)
+                        startupBillingHelper?.queryActivePurchases { isActive ->
+                            if (!isActive) {
+                                enforceFreeTierLimitsIfNeeded(act)
+                            }
+                        }
+                        if (!PremiumManager.isPremium(act)) {
+                            enforceFreeTierLimitsIfNeeded(act)
+                        }
                     }
                 }
 
@@ -210,7 +257,14 @@ object PremiumUiHooks {
             if (startupBillingHelper == null) {
                 startupBillingHelper = BillingHelper(activity.applicationContext)
             } else {
-                startupBillingHelper?.queryActivePurchases()
+                startupBillingHelper?.queryActivePurchases { isActive ->
+                    if (!isActive) {
+                        enforceFreeTierLimitsIfNeeded(activity)
+                    }
+                }
+            }
+            if (!PremiumManager.isPremium(activity)) {
+                enforceFreeTierLimitsIfNeeded(activity)
             }
         } catch (t: Throwable) {
             Log.e(TAG, "Error in onMainActivityCreate", t)
@@ -239,6 +293,7 @@ object PremiumUiHooks {
 
     private fun resolveContext(viewModel: Any? = null): Context? {
         if (viewModel != null) {
+            lastKnownViewModelRef = WeakReference(viewModel)
             val vmApp = safeCall(viewModel, "getApplication") as? Context
             if (vmApp != null) {
                 if (appContext == null) {
@@ -250,13 +305,175 @@ object PremiumUiHooks {
         return appContext ?: findActiveActivity()?.applicationContext
     }
 
+    private fun discoverViewModelIfNeeded(): Any? {
+        lastKnownViewModelRef?.get()?.let { return it }
+        try {
+            val helperClass = Class.forName("com.example.ui.screens.PlaylistTopSearchHelper")
+            val instance = helperClass.getDeclaredField("INSTANCE").apply { isAccessible = true }.get(null)
+            val vm = safeCall(instance, "getBoundViewModel")
+            if (vm != null) {
+                ensureViewModelFlowsSubscribed(vm)
+                return vm
+            }
+        } catch (_: Throwable) {
+        }
+        return null
+    }
+
+    private fun getRepositoryInstance(viewModel: Any? = null): Any? {
+        val vm = viewModel ?: lastKnownViewModelRef?.get()
+        if (vm != null) {
+            val repo = safeGetField(vm, "repository")
+            if (repo != null) return repo
+        }
+        return try {
+            val repoClass = Class.forName("com.example.data.repository.PlaylistRepository")
+            val instanceField = repoClass.getDeclaredField("INSTANCE").apply { isAccessible = true }
+            instanceField.get(null)
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    private fun createPlaylistSource(id: String, title: String, url: String, isPreset: Boolean): Any? {
+        return try {
+            val cls = Class.forName("com.example.data.repository.PlaylistSource")
+            val ctor = cls.getConstructor(
+                String::class.java,
+                String::class.java,
+                String::class.java,
+                Boolean::class.javaPrimitiveType
+            )
+            ctor.newInstance(id, title, url, isPreset)
+        } catch (t: Throwable) {
+            Log.w(TAG, "createPlaylistSource failed", t)
+            null
+        }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun pushCustomChannelsToViewModel(viewModel: Any?) {
+        val vm = viewModel ?: lastKnownViewModelRef?.get() ?: return
+        try {
+            val customMapFlow = safeGetField(vm, "_customPlaylistsChannels") as? MutableStateFlow<Map<Long, List<Any>>>
+            if (customMapFlow != null) {
+                customMapFlow.value = HashMap(customChannelsCache)
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "pushCustomChannelsToViewModel failed", t)
+        }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun syncCustomPlaylistsChannels(viewModel: Any?, entities: Collection<*>) {
+        val repo = getRepositoryInstance(viewModel) ?: return
+        val activeIds = HashSet<Long>()
+        val nonNullEntities = ArrayList<Any>()
+
+        for (item in entities) {
+            if (item == null) continue
+            nonNullEntities.add(item)
+            val id = (safeCall(item, "getId") as? Number)?.toLong() ?: continue
+            val title = (safeCall(item, "getTitle") as? String)?.takeIf { it.isNotBlank() } ?: "Custom Playlist"
+            val url = (safeCall(item, "getUrl") as? String)?.trim() ?: ""
+            if (url.isEmpty()) continue
+
+            activeIds.add(id)
+
+            // Check if already cached in PlaylistRepository.playlistCache synchronously
+            try {
+                val repoCache = safeGetField(repo, "playlistCache") as? Map<*, *>
+                val cachedList = repoCache?.get(url) as? List<Any>
+                if (!cachedList.isNullOrEmpty()) {
+                    customChannelsCache[id] = cachedList
+                }
+            } catch (_: Throwable) {
+            }
+
+            val previousUrl = customPlaylistUrls[id]
+            val existingJob = customPlaylistJobs[id]
+            if (previousUrl == url && (customChannelsCache[id]?.isNotEmpty() == true || existingJob?.isActive == true)) {
+                continue
+            }
+
+            customPlaylistUrls[id] = url
+            existingJob?.cancel()
+
+            val job = ioScope.launch {
+                try {
+                    val source = createPlaylistSource("custom_$id", title, url, false) ?: return@launch
+                    val loadMethod = repo.javaClass.getMethod("loadChannels", source.javaClass)
+                    val flow = loadMethod.invoke(repo, source) as? Flow<*> ?: return@launch
+                    flow.collect { emitted ->
+                        val chList = (emitted as? List<*>)?.filterNotNull()
+                        if (!chList.isNullOrEmpty()) {
+                            customChannelsCache[id] = chList
+                            pushCustomChannelsToViewModel(viewModel)
+                        }
+                    }
+                } catch (t: Throwable) {
+                    Log.w(TAG, "Failed loading custom playlist id=$id", t)
+                }
+            }
+            customPlaylistJobs[id] = job
+        }
+
+        latestCustomEntities = nonNullEntities
+
+        var removedAny = false
+        val iter = customChannelsCache.keys.iterator()
+        while (iter.hasNext()) {
+            val key = iter.next()
+            if (!activeIds.contains(key)) {
+                iter.remove()
+                customPlaylistUrls.remove(key)
+                customPlaylistJobs.remove(key)?.cancel()
+                removedAny = true
+            }
+        }
+        if (removedAny || customChannelsCache.isNotEmpty()) {
+            pushCustomChannelsToViewModel(viewModel)
+        }
+    }
+
+    private val trimLock = Any()
+
     private fun ensureViewModelFlowsSubscribed(viewModel: Any) {
+        lastKnownViewModelRef = WeakReference(viewModel)
         val shouldSubscribe = synchronized(observedViewModels) {
             observedViewModels.add(viewModel)
         }
         if (!shouldSubscribe) return
 
-        // Keep customPlaylists and favorites StateFlows subscribed so WhileSubscribed(5000) stays hot
+        // Subscribe directly to repository.observeCustomPlaylists() so custom playlists load immediately on startup
+        try {
+            val repo = getRepositoryInstance(viewModel)
+            if (repo != null) {
+                val daoFlow = safeCall(repo, "observeCustomPlaylists") as? Flow<*>
+                if (daoFlow != null) {
+                    ioScope.launch {
+                        daoFlow.collect { value ->
+                            val list = value as? Collection<*>
+                            if (list != null) {
+                                cachedPlaylistCount = list.size
+                                syncCustomPlaylistsChannels(viewModel, list)
+                                val ctx = resolveContext(viewModel)
+                                if (!PremiumManager.isPremium(ctx)) {
+                                    val activePresets = getActivePresetPlaylistCount(ctx, viewModel)
+                                    if (activePresets + list.size > 3) {
+                                        enforceFreeTierLimitsIfNeeded(ctx, viewModel)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "Failed subscribing to observeCustomPlaylists", t)
+        }
+
+        // Keep customPlaylists, uiState, and favorites StateFlows subscribed so WhileSubscribed(5000) stays hot
         val customFlow = safeCall(viewModel, "getCustomPlaylists") as? StateFlow<*>
         if (customFlow != null) {
             hookScope.launch {
@@ -264,6 +481,27 @@ object PremiumUiHooks {
                     val list = value as? Collection<*>
                     if (list != null) {
                         cachedPlaylistCount = list.size
+                        syncCustomPlaylistsChannels(viewModel, list)
+                        val ctx = resolveContext(viewModel)
+                        if (!PremiumManager.isPremium(ctx)) {
+                            val activePresets = getActivePresetPlaylistCount(ctx, viewModel)
+                            if (activePresets + list.size > 3) {
+                                enforceFreeTierLimitsIfNeeded(ctx, viewModel)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        val uiStateFlow = safeCall(viewModel, "getUiState") as? StateFlow<*>
+        if (uiStateFlow != null) {
+            hookScope.launch {
+                uiStateFlow.collect { state ->
+                    val list = safeCall(state, "getCustomPlaylists") as? Collection<*>
+                    if (list != null && list.isNotEmpty()) {
+                        cachedPlaylistCount = list.size
+                        syncCustomPlaylistsChannels(viewModel, list)
                     }
                 }
             }
@@ -276,13 +514,238 @@ object PremiumUiHooks {
                     val list = value as? Collection<*>
                     if (list != null) {
                         cachedFavoriteCount = list.size
+                        val ctx = resolveContext(viewModel)
+                        if (!PremiumManager.isPremium(ctx) && list.size > 5) {
+                            enforceFreeTierLimitsIfNeeded(ctx, viewModel)
+                        }
                     }
+                }
+            }
+        }
+
+        val deletedPresetsFlow = safeCall(viewModel, "getDeletedPresetIds") as? StateFlow<*>
+        if (deletedPresetsFlow != null) {
+            hookScope.launch {
+                deletedPresetsFlow.collect {
+                    val ctx = resolveContext(viewModel)
+                    if (!PremiumManager.isPremium(ctx)) {
+                        enforceFreeTierLimitsIfNeeded(ctx, viewModel)
+                    }
+                }
+            }
+        }
+
+        val ctx = resolveContext(viewModel)
+        if (!PremiumManager.isPremium(ctx)) {
+            enforceFreeTierLimitsIfNeeded(ctx, viewModel)
+        }
+    }
+
+    @JvmStatic
+    fun enforceFreeTierLimitsIfNeeded(context: Context? = null, viewModel: Any? = null) {
+        val vm = viewModel ?: discoverViewModelIfNeeded()
+        val ctx = resolveContext(vm) ?: context?.applicationContext ?: context
+        if (PremiumManager.isPremium(ctx)) {
+            return
+        }
+
+        ioScope.launch {
+            if (PremiumManager.isPremium(ctx)) return@launch
+
+            synchronized(trimLock) {
+                try {
+                    val activePresets = getActivePresetPlaylistCount(ctx, vm)
+                    val maxAllowedCustom = (3 - activePresets).coerceAtLeast(0)
+                    val maxAllowedFavorites = 5
+
+                    val roomDb = getRoomDatabaseInstance(ctx, vm)
+                    var trimmedAny = false
+                    val deletedCustomIds = ArrayList<Long>()
+                    val keptFavUrls = LinkedHashSet<String>()
+
+                    if (roomDb != null) {
+                        val supportDb = try {
+                            roomDb.openHelper.writableDatabase
+                        } catch (_: Throwable) {
+                            null
+                        }
+                        if (supportDb != null) {
+                            // 1. Keep only the first maxAllowedCustom custom playlists (ordered oldest first)
+                            val playlistRows = ArrayList<Pair<Long, String>>()
+                            supportDb.query("SELECT id, url FROM custom_playlists ORDER BY createdAt ASC, id ASC").use { cursor ->
+                                while (cursor.moveToNext()) {
+                                    val id = cursor.getLong(0)
+                                    val url = cursor.getString(1) ?: ""
+                                    playlistRows.add(id to url)
+                                }
+                            }
+                            if (playlistRows.size > maxAllowedCustom) {
+                                val repo = getRepositoryInstance(vm)
+                                val repoCache = safeGetField(repo, "playlistCache") as? MutableMap<*, *>
+                                for (i in maxAllowedCustom until playlistRows.size) {
+                                    val (delId, delUrl) = playlistRows[i]
+                                    supportDb.execSQL("DELETE FROM custom_playlists WHERE id = ?", arrayOf<Any>(delId))
+                                    deletedCustomIds.add(delId)
+                                    customChannelsCache.remove(delId)
+                                    customPlaylistUrls.remove(delId)
+                                    customPlaylistJobs.remove(delId)?.cancel()
+                                    try {
+                                        repoCache?.remove(delUrl)
+                                    } catch (_: Throwable) {
+                                    }
+                                    trimmedAny = true
+                                }
+                                synchronized(stateLock) {
+                                    cachedPlaylistCount = maxAllowedCustom
+                                    optimisticPlaylistCount = maxAllowedCustom
+                                }
+                                pushCustomChannelsToViewModel(vm)
+                            }
+
+                            // 2. Keep only the first 5 favorites (ordered oldest first by addedAt ASC, rowid ASC)
+                            val favUrls = ArrayList<String>()
+                            supportDb.query("SELECT streamUrl FROM favorite_channels ORDER BY addedAt ASC, rowid ASC").use { cursor ->
+                                while (cursor.moveToNext()) {
+                                    val url = cursor.getString(0)?.trim()
+                                    if (!url.isNullOrEmpty()) {
+                                        favUrls.add(url)
+                                    }
+                                }
+                            }
+                            for (i in 0 until minOf(maxAllowedFavorites, favUrls.size)) {
+                                keptFavUrls.add(favUrls[i])
+                            }
+                            if (favUrls.size > maxAllowedFavorites) {
+                                for (i in maxAllowedFavorites until favUrls.size) {
+                                    val delUrl = favUrls[i]
+                                    supportDb.execSQL("DELETE FROM favorite_channels WHERE streamUrl = ?", arrayOf<Any>(delUrl))
+                                    trimmedAny = true
+                                }
+                                synchronized(stateLock) {
+                                    optimisticFavoriteUrls.clear()
+                                    optimisticFavoriteUrls.addAll(keptFavUrls)
+                                    hasInitializedFavoritesSet = true
+                                    cachedFavoriteCount = keptFavUrls.size
+                                }
+                            }
+
+                            if (trimmedAny) {
+                                try {
+                                    roomDb.invalidationTracker.refreshVersionsAsync()
+                                } catch (t: Throwable) {
+                                    Log.w(TAG, "refreshVersionsAsync failed", t)
+                                }
+                            }
+                        }
+                    } else if (ctx != null) {
+                        // Direct SQLite fallback if Room instance is not yet initialized
+                        val dbFile = ctx.getDatabasePath("hypnotix_iptv_db")
+                        if (dbFile != null && dbFile.exists()) {
+                            val flags = SQLiteDatabase.OPEN_READWRITE or SQLiteDatabase.ENABLE_WRITE_AHEAD_LOGGING
+                            SQLiteDatabase.openDatabase(dbFile.absolutePath, null, flags).use { sqlite ->
+                                val playlistIds = ArrayList<Long>()
+                                sqlite.rawQuery("SELECT id FROM custom_playlists ORDER BY createdAt ASC, id ASC", null).use { cursor ->
+                                    while (cursor.moveToNext()) {
+                                        playlistIds.add(cursor.getLong(0))
+                                    }
+                                }
+                                if (playlistIds.size > maxAllowedCustom) {
+                                    for (i in maxAllowedCustom until playlistIds.size) {
+                                        val delId = playlistIds[i]
+                                        sqlite.execSQL("DELETE FROM custom_playlists WHERE id = ?", arrayOf<Any>(delId))
+                                        deletedCustomIds.add(delId)
+                                        customChannelsCache.remove(delId)
+                                        customPlaylistUrls.remove(delId)
+                                        customPlaylistJobs.remove(delId)?.cancel()
+                                    }
+                                    synchronized(stateLock) {
+                                        cachedPlaylistCount = maxAllowedCustom
+                                        optimisticPlaylistCount = maxAllowedCustom
+                                    }
+                                }
+
+                                val favUrls = ArrayList<String>()
+                                sqlite.rawQuery("SELECT streamUrl FROM favorite_channels ORDER BY addedAt ASC, rowid ASC", null).use { cursor ->
+                                    while (cursor.moveToNext()) {
+                                        val url = cursor.getString(0)?.trim()
+                                        if (!url.isNullOrEmpty()) {
+                                            favUrls.add(url)
+                                        }
+                                    }
+                                }
+                                for (i in 0 until minOf(maxAllowedFavorites, favUrls.size)) {
+                                    keptFavUrls.add(favUrls[i])
+                                }
+                                if (favUrls.size > maxAllowedFavorites) {
+                                    for (i in maxAllowedFavorites until favUrls.size) {
+                                        val delUrl = favUrls[i]
+                                        sqlite.execSQL("DELETE FROM favorite_channels WHERE streamUrl = ?", arrayOf<Any>(delUrl))
+                                    }
+                                    synchronized(stateLock) {
+                                        optimisticFavoriteUrls.clear()
+                                        optimisticFavoriteUrls.addAll(keptFavUrls)
+                                        hasInitializedFavoritesSet = true
+                                        cachedFavoriteCount = keptFavUrls.size
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // If a deleted custom playlist was currently active, switch to All Playlists or active preset
+                    if (deletedCustomIds.isNotEmpty() && vm != null) {
+                        val deletedSourceIds = deletedCustomIds.map { "custom_$it" }.toSet()
+                        mainHandler.post {
+                            try {
+                                val selFlow = safeGetField(vm, "_selectedPlaylist") as? StateFlow<*>
+                                val curId = safeCall(selFlow?.value, "getId") as? String
+                                val chSelFlow = safeGetField(vm, "_channelSelectedPlaylist") as? StateFlow<*>
+                                val chCurId = safeCall(chSelFlow?.value, "getId") as? String
+                                if ((curId != null && deletedSourceIds.contains(curId)) ||
+                                    (chCurId != null && deletedSourceIds.contains(chCurId))
+                                ) {
+                                    val presetCls = Class.forName("com.example.data.repository.PresetPlaylists")
+                                    val presetInstance = presetCls.getDeclaredField("INSTANCE").apply { isAccessible = true }.get(null)
+                                    val allSource = safeCall(presetInstance, "getALL")
+                                    if (allSource != null) {
+                                        val selectMethod = vm.javaClass.getMethod("selectPlaylist", allSource.javaClass)
+                                        selectMethod.invoke(vm, allSource)
+                                    }
+                                }
+                            } catch (t: Throwable) {
+                                Log.w(TAG, "Failed switching away from trimmed custom playlist", t)
+                            }
+                        }
+                    }
+                } catch (t: Throwable) {
+                    Log.e(TAG, "Error enforcing free tier limits", t)
                 }
             }
         }
     }
 
-    private fun getRoomDatabaseInstance(context: Context): RoomDatabase? {
+    private fun getRoomDatabaseInstance(context: Context?, viewModel: Any? = null): RoomDatabase? {
+        cachedRoomDbRef?.get()?.let { cached ->
+            if (cached.isOpen) return cached
+        }
+
+        val vm = viewModel ?: lastKnownViewModelRef?.get()
+        if (vm != null) {
+            try {
+                val repo = safeGetField(vm, "repository")
+                val dao = safeGetField(repo, "channelDao")
+                val db = safeGetField(dao, "__db") as? RoomDatabase
+                if (db != null) {
+                    cachedRoomDbRef = WeakReference(db)
+                    return db
+                }
+            } catch (t: Throwable) {
+                Log.w(TAG, "Unable to extract RoomDatabase from ViewModel repository", t)
+            }
+        }
+
+        if (context == null) return null
+
         return try {
             val dbClass = Class.forName("com.example.data.local.IptvDatabase")
             val instanceField = try {
@@ -292,24 +755,36 @@ object PremiumUiHooks {
             }
             val existing = instanceField?.get(null) as? RoomDatabase
             if (existing != null) {
+                cachedRoomDbRef = WeakReference(existing)
                 return existing
             }
             val companionField = dbClass.getDeclaredField("Companion").apply { isAccessible = true }
             val companion = companionField.get(null)
-            val getDbMethod = companion.javaClass.getMethod("getDatabase", Context::class.java)
-            getDbMethod.invoke(companion, context.applicationContext) as? RoomDatabase
+            val getDbMethod = try {
+                companion.javaClass.getMethod("getInstance", Context::class.java)
+            } catch (_: NoSuchMethodException) {
+                companion.javaClass.getMethod("getDatabase", Context::class.java)
+            }
+            val created = getDbMethod.invoke(companion, context.applicationContext) as? RoomDatabase
+            if (created != null) {
+                cachedRoomDbRef = WeakReference(created)
+            }
+            created
         } catch (t: Throwable) {
             Log.w(TAG, "Unable to obtain IptvDatabase via reflection", t)
             null
         }
     }
 
-    private fun queryDbPlaylistCount(context: Context?): Int {
-        if (context == null) return -1
+    private fun queryDbPlaylistCount(context: Context?, viewModel: Any? = null): Int {
         try {
-            val roomDb = getRoomDatabaseInstance(context)
+            val roomDb = getRoomDatabaseInstance(context, viewModel)
             if (roomDb != null) {
-                val supportDb = roomDb.openHelper.readableDatabase
+                val supportDb = try {
+                    roomDb.openHelper.writableDatabase
+                } catch (_: Throwable) {
+                    roomDb.openHelper.readableDatabase
+                }
                 supportDb.query("SELECT COUNT(*) FROM custom_playlists").use { cursor ->
                     if (cursor.moveToFirst()) {
                         return cursor.getInt(0)
@@ -320,15 +795,19 @@ object PremiumUiHooks {
             Log.w(TAG, "Room queryDbPlaylistCount fallback triggered", t)
         }
 
+        if (context == null) return -1
+
         return try {
             val dbFile = context.getDatabasePath("hypnotix_iptv_db")
             if (dbFile != null && dbFile.exists()) {
-                SQLiteDatabase.openDatabase(
-                    dbFile.absolutePath,
-                    null,
-                    SQLiteDatabase.OPEN_READONLY
-                ).use { db ->
-                    db.rawQuery("SELECT COUNT(*) FROM custom_playlists", null).use { cursor ->
+                val flags = SQLiteDatabase.OPEN_READWRITE or SQLiteDatabase.ENABLE_WRITE_AHEAD_LOGGING
+                val db = try {
+                    SQLiteDatabase.openDatabase(dbFile.absolutePath, null, flags)
+                } catch (_: Throwable) {
+                    SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
+                }
+                db.use { sqlite ->
+                    sqlite.rawQuery("SELECT COUNT(*) FROM custom_playlists", null).use { cursor ->
                         if (cursor.moveToFirst()) cursor.getInt(0) else -1
                     }
                 }
@@ -341,12 +820,15 @@ object PremiumUiHooks {
         }
     }
 
-    private fun queryDbFavoriteUrls(context: Context?): Set<String>? {
-        if (context == null) return null
+    private fun queryDbFavoriteUrls(context: Context?, viewModel: Any? = null): Set<String>? {
         try {
-            val roomDb = getRoomDatabaseInstance(context)
+            val roomDb = getRoomDatabaseInstance(context, viewModel)
             if (roomDb != null) {
-                val supportDb = roomDb.openHelper.readableDatabase
+                val supportDb = try {
+                    roomDb.openHelper.writableDatabase
+                } catch (_: Throwable) {
+                    roomDb.openHelper.readableDatabase
+                }
                 supportDb.query("SELECT streamUrl FROM favorite_channels").use { cursor ->
                     val urls = LinkedHashSet<String>()
                     while (cursor.moveToNext()) {
@@ -362,15 +844,19 @@ object PremiumUiHooks {
             Log.w(TAG, "Room queryDbFavoriteUrls fallback triggered", t)
         }
 
+        if (context == null) return null
+
         return try {
             val dbFile = context.getDatabasePath("hypnotix_iptv_db")
             if (dbFile != null && dbFile.exists()) {
-                SQLiteDatabase.openDatabase(
-                    dbFile.absolutePath,
-                    null,
-                    SQLiteDatabase.OPEN_READONLY
-                ).use { db ->
-                    db.rawQuery("SELECT streamUrl FROM favorite_channels", null).use { cursor ->
+                val flags = SQLiteDatabase.OPEN_READWRITE or SQLiteDatabase.ENABLE_WRITE_AHEAD_LOGGING
+                val db = try {
+                    SQLiteDatabase.openDatabase(dbFile.absolutePath, null, flags)
+                } catch (_: Throwable) {
+                    SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
+                }
+                db.use { sqlite ->
+                    sqlite.rawQuery("SELECT streamUrl FROM favorite_channels", null).use { cursor ->
                         val urls = LinkedHashSet<String>()
                         while (cursor.moveToNext()) {
                             val url = cursor.getString(0)?.trim()
@@ -388,6 +874,91 @@ object PremiumUiHooks {
             Log.e(TAG, "Direct SQLite queryDbFavoriteUrls failed", t)
             null
         }
+    }
+
+    private fun getViewModelPlaylistCount(viewModel: Any?): Int {
+        if (viewModel == null) return -1
+        var bestCount = -1
+        try {
+            val customFlow = safeCall(viewModel, "getCustomPlaylists") as? StateFlow<*>
+            val flowList = customFlow?.value as? Collection<*>
+            if (flowList != null && flowList.isNotEmpty()) {
+                bestCount = maxOf(bestCount, flowList.size)
+            }
+        } catch (_: Throwable) {
+        }
+        try {
+            val uiStateFlow = safeCall(viewModel, "getUiState") as? StateFlow<*>
+            val uiState = uiStateFlow?.value
+            val stateList = safeCall(uiState, "getCustomPlaylists") as? Collection<*>
+            if (stateList != null && stateList.isNotEmpty()) {
+                bestCount = maxOf(bestCount, stateList.size)
+            }
+        } catch (_: Throwable) {
+        }
+        return bestCount
+    }
+
+    private fun getActivePresetPlaylistCount(context: Context?, viewModel: Any? = null): Int {
+        val deletedIds = HashSet<String>()
+        var resolvedFromVm = false
+        val vm = viewModel ?: lastKnownViewModelRef?.get()
+        if (vm != null) {
+            try {
+                val deletedFlow = safeCall(vm, "getDeletedPresetIds") as? StateFlow<*>
+                val flowSet = deletedFlow?.value as? Collection<*>
+                if (flowSet != null) {
+                    resolvedFromVm = true
+                    for (item in flowSet) {
+                        val id = item?.toString()?.trim()
+                        if (!id.isNullOrEmpty()) {
+                            deletedIds.add(id)
+                        }
+                    }
+                }
+            } catch (_: Throwable) {
+            }
+        }
+        if (!resolvedFromVm && context != null) {
+            try {
+                val prefs = context.getSharedPreferences("hypnotix_prefs", Context.MODE_PRIVATE)
+                val savedSet = prefs.getStringSet("deleted_preset_ids", emptySet())
+                if (savedSet != null) {
+                    for (id in savedSet) {
+                        if (!id.isNullOrBlank()) {
+                            deletedIds.add(id.trim())
+                        }
+                    }
+                }
+            } catch (_: Throwable) {
+            }
+        }
+        var activePresets = 0
+        if (!deletedIds.contains("preset_india")) activePresets++
+        if (!deletedIds.contains("preset_global")) activePresets++
+        return activePresets
+    }
+
+    private fun isAppInDarkMode(context: Context, viewModel: Any? = null): Boolean {
+        val vm = viewModel ?: lastKnownViewModelRef?.get()
+        if (vm != null) {
+            try {
+                val themeFlow = safeCall(vm, "getCurrentThemeMode") as? StateFlow<*>
+                val modeName = themeFlow?.value?.toString()?.uppercase()
+                if (modeName == "DARK") return true
+                if (modeName == "LIGHT") return false
+            } catch (_: Throwable) {
+            }
+        }
+        try {
+            val prefs = context.getSharedPreferences("hypnotix_prefs", Context.MODE_PRIVATE)
+            val savedMode = prefs.getString("app_theme_mode", "system")?.lowercase()
+            if (savedMode == "dark") return true
+            if (savedMode == "light") return false
+        } catch (_: Throwable) {
+        }
+        val nightMask = context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
+        return nightMask == Configuration.UI_MODE_NIGHT_YES
     }
 
     private fun launchPaywall(context: Context? = null) {
@@ -413,10 +984,11 @@ object PremiumUiHooks {
     private fun showLimitReachedPopup(
         title: String,
         message: String,
-        contextFallback: Context? = null
+        contextFallback: Context? = null,
+        viewModel: Any? = null
     ) {
         val showAction = Runnable {
-            val activity = findActiveActivity()
+            val activity = findActiveActivity() ?: unwrapActivity(contextFallback)
             if (activity == null || activity.isFinishing || activity.isDestroyed) {
                 launchPaywall(contextFallback)
                 return@Runnable
@@ -432,6 +1004,47 @@ object PremiumUiHooks {
             }
 
             try {
+                val isDark = isAppInDarkMode(activity, viewModel)
+
+                // Red, Black (Dark Mode) & White (Light Mode) theme palette matching AppColors
+                val cardBgColor = if (isDark) {
+                    AndroidColor.parseColor("#0D0D0D") // Deep Black in Dark Mode
+                } else {
+                    AndroidColor.parseColor("#FFFFFF") // Pure White in Light Mode
+                }
+                val redAccentColor = AndroidColor.parseColor("#E50914") // Hypnotix Primary Red
+                val redDarkAccentColor = AndroidColor.parseColor("#B91C1C")
+                val badgeFillColor = if (isDark) {
+                    AndroidColor.parseColor("#26E50914")
+                } else {
+                    AndroidColor.parseColor("#1AE50914")
+                }
+                val titleTextColor = if (isDark) {
+                    AndroidColor.parseColor("#FFFFFF") // White text on Black card
+                } else {
+                    AndroidColor.parseColor("#0D0D0D") // Black text on White card
+                }
+                val messageTextColor = if (isDark) {
+                    AndroidColor.parseColor("#D4D4D8") // Soft White/Silver on Black card
+                } else {
+                    AndroidColor.parseColor("#3F3F46") // Charcoal/Black on White card
+                }
+                val cancelBtnBgColor = if (isDark) {
+                    AndroidColor.parseColor("#1A1A1A")
+                } else {
+                    AndroidColor.parseColor("#F4F4F5")
+                }
+                val cancelBtnBorderColor = if (isDark) {
+                    AndroidColor.parseColor("#2E2E2E")
+                } else {
+                    AndroidColor.parseColor("#E4E4E7")
+                }
+                val cancelBtnTextColor = if (isDark) {
+                    AndroidColor.parseColor("#FFFFFF")
+                } else {
+                    AndroidColor.parseColor("#0D0D0D")
+                }
+
                 val dialog = Dialog(activity)
                 dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
                 dialog.setCancelable(true)
@@ -446,20 +1059,20 @@ object PremiumUiHooks {
                     background = GradientDrawable().apply {
                         shape = GradientDrawable.RECTANGLE
                         cornerRadius = dpToPx(activity, 24f).toFloat()
-                        setColor(AndroidColor.parseColor("#141A26"))
-                        setStroke(dpToPx(activity, 1.5f), AndroidColor.parseColor("#2CA8FE"))
+                        setColor(cardBgColor)
+                        setStroke(dpToPx(activity, 1.5f), redAccentColor)
                     }
                 }
 
-                // Crown Icon Circle Badge
+                // Crown Icon Circle Badge (Red accent ring + soft red fill)
                 val iconBadge = TextView(activity).apply {
                     text = "👑"
                     setTextSize(TypedValue.COMPLEX_UNIT_SP, 26f)
                     gravity = Gravity.CENTER
                     background = GradientDrawable().apply {
                         shape = GradientDrawable.OVAL
-                        setColor(AndroidColor.parseColor("#26FFD700"))
-                        setStroke(dpToPx(activity, 1.2f), AndroidColor.parseColor("#FFD700"))
+                        setColor(badgeFillColor)
+                        setStroke(dpToPx(activity, 1.4f), redAccentColor)
                     }
                 }
                 val badgeSize = dpToPx(activity, 60f)
@@ -473,7 +1086,7 @@ object PremiumUiHooks {
                 // Title
                 val titleView = TextView(activity).apply {
                     text = title
-                    setTextColor(AndroidColor.WHITE)
+                    setTextColor(titleTextColor)
                     setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
                     typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
                     gravity = Gravity.CENTER
@@ -491,7 +1104,7 @@ object PremiumUiHooks {
                 // Description Message
                 val messageView = TextView(activity).apply {
                     text = message
-                    setTextColor(AndroidColor.parseColor("#B0B8C8"))
+                    setTextColor(messageTextColor)
                     setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
                     gravity = Gravity.CENTER
                     setLineSpacing(dpToPx(activity, 3f).toFloat(), 1.0f)
@@ -506,7 +1119,7 @@ object PremiumUiHooks {
                     }
                 )
 
-                // Primary Button: Buy Subscription
+                // Primary Button: Buy Subscription (Hypnotix Red Gradient + White Bold Text)
                 val buyButton = TextView(activity).apply {
                     text = "Buy Subscription"
                     setTextColor(AndroidColor.WHITE)
@@ -518,8 +1131,8 @@ object PremiumUiHooks {
                     background = GradientDrawable(
                         GradientDrawable.Orientation.LEFT_RIGHT,
                         intArrayOf(
-                            AndroidColor.parseColor("#1A86F0"),
-                            AndroidColor.parseColor("#2CA8FE")
+                            redAccentColor,
+                            redDarkAccentColor
                         )
                     ).apply {
                         shape = GradientDrawable.RECTANGLE
@@ -543,15 +1156,21 @@ object PremiumUiHooks {
                     }
                 )
 
-                // Secondary Button: Not Now
+                // Secondary Button: Not Now (Black/White surface pill matching theme)
                 val cancelButton = TextView(activity).apply {
                     text = "Not Now"
-                    setTextColor(AndroidColor.parseColor("#8E95A5"))
+                    setTextColor(cancelBtnTextColor)
                     setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
                     typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
                     gravity = Gravity.CENTER
-                    val cancelPadV = dpToPx(activity, 8f)
+                    val cancelPadV = dpToPx(activity, 11f)
                     setPadding(0, cancelPadV, 0, cancelPadV)
+                    background = GradientDrawable().apply {
+                        shape = GradientDrawable.RECTANGLE
+                        cornerRadius = dpToPx(activity, 25f).toFloat()
+                        setColor(cancelBtnBgColor)
+                        setStroke(dpToPx(activity, 1f), cancelBtnBorderColor)
+                    }
                     setOnClickListener {
                         try {
                             dialog.dismiss()
@@ -584,11 +1203,9 @@ object PremiumUiHooks {
             }
         }
 
-        if (Looper.myLooper() == Looper.getMainLooper()) {
-            showAction.run()
-        } else {
-            mainHandler.post(showAction)
-        }
+        // Always post to mainHandler so if called right before a screen state transition
+        // (such as AddPlaylistScreen closing back to MainAppScreen), the Dialog displays cleanly on top.
+        mainHandler.post(showAction)
     }
 
     @JvmStatic
@@ -601,9 +1218,233 @@ object PremiumUiHooks {
         return true
     }
 
+    private fun copyChannelWithPlaylistTitle(channel: Any, playlistTitle: String): Any {
+        try {
+            var method = channelCopyDefaultMethod
+            if (method == null) {
+                val cls = channel.javaClass
+                method = cls.declaredMethods.firstOrNull {
+                    it.name == "copy\$default" && it.parameterTypes.size == 15
+                }?.apply { isAccessible = true }
+                channelCopyDefaultMethod = method
+            }
+            if (method != null) {
+                return method.invoke(
+                    null,
+                    channel,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    false,
+                    playlistTitle,
+                    null,
+                    null,
+                    false,
+                    3839,
+                    null
+                ) ?: channel
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "copyChannelWithPlaylistTitle failed", t)
+        }
+        return channel
+    }
+
+    private fun interleaveByCategory(channels: List<Any>): List<Any> {
+        if (channels.size <= 2) return channels
+        val byCategory = LinkedHashMap<String, ArrayList<Any>>()
+        for (ch in channels) {
+            val cat = (safeCall(ch, "getCategory") as? String)?.trim()?.takeIf { it.isNotEmpty() } ?: "General"
+            byCategory.getOrPut(cat) { ArrayList() }.add(ch)
+        }
+        if (byCategory.size <= 1) return channels
+
+        val categoryLists = ArrayList(byCategory.values)
+        val maxCatSize = categoryLists.maxOfOrNull { it.size } ?: 0
+        val result = ArrayList<Any>(channels.size)
+        for (i in 0 until maxCatSize) {
+            for (catList in categoryLists) {
+                if (i < catList.size) {
+                    result.add(catList[i])
+                }
+            }
+        }
+        return result
+    }
+
+    private fun getPresetFallbackChannels(fieldName: String): List<Any> {
+        return try {
+            val cls = Class.forName("com.example.data.repository.PresetPlaylists")
+            val field = cls.getDeclaredField(fieldName).apply { isAccessible = true }
+            (field.get(null) as? List<*>)?.filterNotNull() ?: emptyList()
+        } catch (_: Throwable) {
+            emptyList()
+        }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun buildMixedAllPlaylistsChannels(args: Array<*>, outList: MutableList<Any>) {
+        try {
+            val vm = discoverViewModelIfNeeded()
+            val repo = getRepositoryInstance(vm)
+            val repoCache = safeGetField(repo, "playlistCache") as? Map<*, *>
+
+            val indiaRaw = (args.getOrNull(0) as? List<*>)?.filterNotNull() ?: emptyList()
+            val globalRaw = (args.getOrNull(1) as? List<*>)?.filterNotNull() ?: emptyList()
+            val customMap = args.getOrNull(2) as? Map<*, *> ?: emptyMap<Any, Any>()
+            val cListsArg = (args.getOrNull(3) as? List<*>)?.filterNotNull() ?: emptyList()
+            val deletedPresetsArg = args.getOrNull(4) as? Collection<*> ?: emptySet<String>()
+
+            val deletedSet = HashSet<String>()
+            for (item in deletedPresetsArg) {
+                val id = item?.toString()?.trim()
+                if (!id.isNullOrEmpty()) {
+                    deletedSet.add(id)
+                }
+            }
+
+            val effectiveCustomEntities = if (cListsArg.isNotEmpty()) {
+                cListsArg
+            } else {
+                latestCustomEntities
+            }
+
+            if (effectiveCustomEntities.isNotEmpty()) {
+                syncCustomPlaylistsChannels(vm, effectiveCustomEntities)
+            }
+
+            val activePlaylistBuckets = ArrayList<List<Any>>()
+
+            // 1. Collect all currently added Custom Playlists' channels
+            for (entity in effectiveCustomEntities) {
+                val id = (safeCall(entity, "getId") as? Number)?.toLong() ?: continue
+                val title = (safeCall(entity, "getTitle") as? String)?.takeIf { it.isNotBlank() } ?: "Custom Playlist"
+                val url = (safeCall(entity, "getUrl") as? String)?.trim() ?: ""
+
+                val rawChannels: List<Any> = ((customMap[id] as? List<*>)?.filterNotNull()?.takeIf { it.isNotEmpty() })
+                    ?: (customChannelsCache[id]?.takeIf { it.isNotEmpty() })
+                    ?: ((repoCache?.get(url) as? List<*>)?.filterNotNull()?.takeIf { it.isNotEmpty() }?.also {
+                        customChannelsCache[id] = it
+                    })
+                    ?: emptyList()
+
+                if (rawChannels.isNotEmpty()) {
+                    val tagged = ArrayList<Any>(rawChannels.size)
+                    for (ch in rawChannels) {
+                        tagged.add(copyChannelWithPlaylistTitle(ch, title))
+                    }
+                    activePlaylistBuckets.add(interleaveByCategory(tagged))
+                }
+            }
+
+            // 2. Collect India Channels if not deleted
+            if (!deletedSet.contains("preset_india")) {
+                val effectiveIndia = indiaRaw.ifEmpty {
+                    (repoCache?.get("https://iptv-org.github.io/iptv/countries/in.m3u") as? List<*>)?.filterNotNull()
+                        ?.takeIf { it.isNotEmpty() }
+                        ?: getPresetFallbackChannels("FALLBACK_INDIA_CHANNELS")
+                }
+                if (effectiveIndia.isNotEmpty()) {
+                    val tagged = ArrayList<Any>(effectiveIndia.size)
+                    for (ch in effectiveIndia) {
+                        tagged.add(copyChannelWithPlaylistTitle(ch, "India Channels"))
+                    }
+                    activePlaylistBuckets.add(interleaveByCategory(tagged))
+                }
+            }
+
+            // 3. Collect Global Channels if not deleted
+            if (!deletedSet.contains("preset_global")) {
+                val effectiveGlobal = globalRaw.ifEmpty {
+                    (repoCache?.get("https://iptv-org.github.io/iptv/index.m3u") as? List<*>)?.filterNotNull()
+                        ?.takeIf { it.isNotEmpty() }
+                        ?: getPresetFallbackChannels("FALLBACK_GLOBAL_CHANNELS")
+                }
+                if (effectiveGlobal.isNotEmpty()) {
+                    val tagged = ArrayList<Any>(effectiveGlobal.size)
+                    for (ch in effectiveGlobal) {
+                        tagged.add(copyChannelWithPlaylistTitle(ch, "Global Channels"))
+                    }
+                    activePlaylistBuckets.add(interleaveByCategory(tagged))
+                }
+            }
+
+            if (activePlaylistBuckets.isEmpty()) {
+                return
+            }
+
+            // 4. Round-robin mix across all active playlists and deduplicate by streamUrl
+            outList.clear()
+            val seenUrls = HashSet<String>()
+            val maxBucketSize = activePlaylistBuckets.maxOfOrNull { it.size } ?: 0
+
+            for (i in 0 until maxBucketSize) {
+                for (bucket in activePlaylistBuckets) {
+                    if (i < bucket.size) {
+                        val ch = bucket[i]
+                        val streamUrl = (safeCall(ch, "getStreamUrl") as? String)?.trim() ?: ""
+                        val key = if (streamUrl.isNotEmpty()) streamUrl else ch.hashCode().toString()
+                        if (seenUrls.add(key)) {
+                            outList.add(ch)
+                        }
+                    }
+                }
+            }
+        } catch (t: Throwable) {
+            Log.e(TAG, "buildMixedAllPlaylistsChannels failed; keeping existing list", t)
+        }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun onPlaylistSelectedHook(viewModel: Any, source: Any) {
+        try {
+            ensureViewModelFlowsSubscribed(viewModel)
+            (safeGetField(viewModel, "_selectedCategory") as? MutableStateFlow<String>)?.value = "All"
+            (safeGetField(viewModel, "_channelSelectedCategory") as? MutableStateFlow<String>)?.value = "All"
+            (safeGetField(viewModel, "_selectedCountry") as? MutableStateFlow<String>)?.value = "All"
+            (safeGetField(viewModel, "_selectedLanguage") as? MutableStateFlow<String>)?.value = "All"
+
+            val sourceId = safeCall(source, "getId") as? String
+            if (sourceId == "preset_all") {
+                if (latestCustomEntities.isNotEmpty()) {
+                    syncCustomPlaylistsChannels(viewModel, latestCustomEntities)
+                }
+                pushCustomChannelsToViewModel(viewModel)
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "onPlaylistSelectedHook failed", t)
+        }
+    }
+
     @JvmStatic
     fun shouldBlockPlayChannel(viewModel: Any, channel: Any): Boolean {
+        // Hook C: Called from IptvViewModel$special$$inlined$combine$1$3.invokeSuspend with (Object[] args, ArrayList outList)
+        if (viewModel is Array<*> && channel is MutableList<*>) {
+            @Suppress("UNCHECKED_CAST")
+            buildMixedAllPlaylistsChannels(viewModel, channel as MutableList<Any>)
+            return false
+        }
+
+        // Hook A: Called from IptvViewModel.<init> with (IptvViewModel, Flow[] flows)
+        if (channel is Array<*>) {
+            resolveContext(viewModel)
+            ensureViewModelFlowsSubscribed(viewModel)
+            return false
+        }
+
+        // Hook B: Called from IptvViewModel.selectPlaylist with (IptvViewModel, PlaylistSource)
+        if (channel.javaClass.name.endsWith("PlaylistSource")) {
+            resolveContext(viewModel)
+            onPlaylistSelectedHook(viewModel, channel)
+            return false
+        }
+
         val ctx = resolveContext(viewModel)
+        ensureViewModelFlowsSubscribed(viewModel)
         if (PremiumManager.isPremium(ctx)) {
             return false
         }
@@ -676,36 +1517,43 @@ object PremiumUiHooks {
 
         synchronized(stateLock) {
             val now = System.currentTimeMillis()
-            val dbCount = queryDbPlaylistCount(ctx)
+            val dbCount = queryDbPlaylistCount(ctx, viewModel)
+            val vmCount = getViewModelPlaylistCount(viewModel)
 
-            val customFlow = safeCall(viewModel, "getCustomPlaylists") as? StateFlow<*>
-            val flowList = customFlow?.value as? Collection<*>
-            val flowCount = if (flowList != null && flowList.isNotEmpty()) flowList.size else -1
-
-            // If enough time has passed for Room's IO insert/delete to settle, sync optimistic count with DB
-            if (now - lastPlaylistAddMs > 3000L && dbCount >= 0) {
-                optimisticPlaylistCount = dbCount
+            // Sync optimistic custom count with live DB/ViewModel state after rapid insert window settles
+            if (now - lastPlaylistAddMs > 1800L) {
+                if (dbCount >= 0 && vmCount >= 0) {
+                    optimisticPlaylistCount = maxOf(dbCount, vmCount)
+                } else if (dbCount >= 0) {
+                    optimisticPlaylistCount = dbCount
+                } else if (vmCount >= 0) {
+                    optimisticPlaylistCount = vmCount
+                }
             }
 
-            val currentCount = maxOf(
+            val currentCustomCount = maxOf(
                 dbCount,
-                flowCount,
+                vmCount,
                 optimisticPlaylistCount,
-                if (dbCount < 0 && flowCount < 0) cachedPlaylistCount else 0
+                if (dbCount < 0 && vmCount < 0) cachedPlaylistCount else 0
             )
 
-            cachedPlaylistCount = currentCount
+            cachedPlaylistCount = currentCustomCount
 
-            if (!PremiumManager.canAddPlaylist(currentCount)) {
+            val activePresetCount = getActivePresetPlaylistCount(ctx, viewModel)
+            val totalPlaylistCount = activePresetCount + currentCustomCount
+
+            if (!PremiumManager.canAddPlaylist(totalPlaylistCount)) {
                 showLimitReachedPopup(
                     title = "Playlist Limit Reached",
-                    message = "You have already added 3 playlists. To remove this limit and add unlimited playlists, please buy a subscription.",
-                    contextFallback = ctx
+                    message = "You already have 3 playlists (including preset playlists). To remove this limit and add unlimited playlists, please buy a subscription.",
+                    contextFallback = ctx,
+                    viewModel = viewModel
                 )
                 return true
             }
 
-            optimisticPlaylistCount = currentCount + 1
+            optimisticPlaylistCount = currentCustomCount + 1
             lastPlaylistAddMs = now
             cachedPlaylistCount = optimisticPlaylistCount
             return false
@@ -725,7 +1573,7 @@ object PremiumUiHooks {
             val now = System.currentTimeMillis()
             val targetUrl = (safeCall(channel, "getStreamUrl") as? String)?.trim() ?: ""
 
-            val dbFavUrls = queryDbFavoriteUrls(ctx)
+            val dbFavUrls = queryDbFavoriteUrls(ctx, viewModel)
 
             val favFlow = safeCall(viewModel, "getFavorites") as? StateFlow<*>
             val favList = favFlow?.value as? Collection<*>
@@ -775,7 +1623,8 @@ object PremiumUiHooks {
                 showLimitReachedPopup(
                     title = "Favorites Limit Reached",
                     message = "You have already added 5 favorites. To remove this limit and add unlimited favorite channels, please buy a subscription.",
-                    contextFallback = ctx
+                    contextFallback = ctx,
+                    viewModel = viewModel
                 )
                 return true
             }

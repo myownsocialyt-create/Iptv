@@ -13,8 +13,8 @@ android {
         applicationId = "com.hypnotix.iptv"
         minSdk = 26
         targetSdk = 36
-        versionCode = 4
-        versionName = "1.0.3"
+        versionCode = 5
+        versionName = "1.0.4"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -79,6 +79,12 @@ tasks.matching { it.name == "dexBuilderDebug" }.configureEach {
 
 tasks.matching { it.name in listOf("mergeProjectDexDebug", "packageDebug") }.configureEach {
     outputs.upToDateWhen { false }
+}
+
+tasks.matching { it.name == "packageDebug" }.configureEach {
+    doFirst {
+        layout.buildDirectory.dir("intermediates/incremental/packageDebug").get().asFile.deleteRecursively()
+    }
 }
 
 tasks.matching { it.name == "mergeProjectDexDebug" }.configureEach {

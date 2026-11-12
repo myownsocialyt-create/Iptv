@@ -55,6 +55,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -151,6 +152,17 @@ fun SubscriptionContent(
     val lifetimePrice = billingHelper.priceDisplayMap[PremiumManager.PLAN_LIFETIME] ?: "₹1,499.00"
 
     val scrollState = rememberScrollState()
+    val heroBitmap = remember(context) {
+        try {
+            context.assets.open("subscription_hero_poster.jpg").use { stream ->
+                android.graphics.BitmapFactory.decodeStream(stream)?.let { bmp ->
+                    bmp.asImageBitmap()
+                }
+            }
+        } catch (_: Throwable) {
+            null
+        }
+    }
 
     Box(
         modifier = Modifier
@@ -168,14 +180,23 @@ fun SubscriptionContent(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(240.dp)
+                    .height(250.dp)
             ) {
-                Image(
-                    painter = painterResource(id = R.drawable.img_banner_sports_live),
-                    contentDescription = "Premium Banner",
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop
-                )
+                if (heroBitmap != null) {
+                    Image(
+                        bitmap = heroBitmap,
+                        contentDescription = "Premium Banner",
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop
+                    )
+                } else {
+                    Image(
+                        painter = painterResource(id = R.drawable.img_banner_sports_live),
+                        contentDescription = "Premium Banner",
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop
+                    )
+                }
 
                 // Gradient fade to dark background at the bottom
                 Box(

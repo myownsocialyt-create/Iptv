@@ -93,6 +93,9 @@ object PremiumManager {
         val (verifiedPrem, verifiedPlan) = verifyStoredPremium(app, prefs)
         isPremiumState.value = verifiedPrem
         activePlanState.value = verifiedPlan
+        if (!verifiedPrem) {
+            PremiumUiHooks.enforceFreeTierLimitsIfNeeded(app)
+        }
     }
 
     @JvmStatic
@@ -126,6 +129,9 @@ object PremiumManager {
             .apply()
         isPremiumState.value = isPremium
         activePlanState.value = normalizedPlan
+        if (!isPremium) {
+            PremiumUiHooks.enforceFreeTierLimitsIfNeeded(app)
+        }
     }
 
     @JvmStatic
