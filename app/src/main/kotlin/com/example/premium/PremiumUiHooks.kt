@@ -5,18 +5,22 @@ import android.app.Application
 import android.app.Dialog
 import android.content.Context
 import android.content.ContextWrapper
+import android.content.Intent
 import android.content.res.Configuration
 import android.database.sqlite.SQLiteDatabase
 import android.graphics.Color as AndroidColor
 import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.ViewGroup
 import android.view.Window
 import android.widget.LinearLayout
@@ -55,6 +59,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.room.RoomDatabase
+import com.google.firebase.remoteconfig.ConfigUpdate
+import com.google.firebase.remoteconfig.ConfigUpdateListener
+import com.google.firebase.remoteconfig.FirebaseRemoteConfig
+import com.google.firebase.remoteconfig.FirebaseRemoteConfigException
+import com.google.firebase.remoteconfig.FirebaseRemoteConfigSettings
 import java.lang.ref.WeakReference
 import java.util.Collections
 import java.util.WeakHashMap
@@ -96,6 +105,16 @@ object PremiumUiHooks {
     private var lifecycleRegistered: Boolean = false
 
     private var activeLimitDialogRef: WeakReference<Dialog>? = null
+
+    private var activeForceUpdateDialogRef: WeakReference<Dialog>? = null
+
+    private var activeForceUpdateActivityRef: WeakReference<Activity>? = null
+
+    @Volatile
+    private var isForceUpdateRequired: Boolean = false
+
+    @Volatile
+    private var remoteVersionListenerRegistered: Boolean = false
 
     private val observedViewModels = Collections.newSetFromMap(WeakHashMap<Any, Boolean>())
 
@@ -223,6 +242,7 @@ object PremiumUiHooks {
                 override fun onActivityResumed(act: Activity) {
                     if (act !is SubscriptionActivity) {
                         currentActivityRef = WeakReference(act)
+                        checkRemoteMinimumVersion(act)
                         startupBillingHelper?.queryActivePurchases { isActive ->
                             if (!isActive) {
                                 enforceFreeTierLimitsIfNeeded(act)
@@ -230,6 +250,11 @@ object PremiumUiHooks {
                         }
                         if (!PremiumManager.isPremium(act)) {
                             enforceFreeTierLimitsIfNeeded(act)
+                        }
+                    } else if (isForceUpdateRequired) {
+                        try {
+                            act.finish()
+                        } catch (_: Throwable) {
                         }
                     }
                 }
@@ -242,6 +267,11 @@ object PremiumUiHooks {
                     if (current === act) {
                         currentActivityRef = null
                     }
+                    val forceAct = activeForceUpdateActivityRef?.get()
+                    if (forceAct === act) {
+                        activeForceUpdateActivityRef = null
+                        activeForceUpdateDialogRef = null
+                    }
                 }
             })
         }
@@ -253,6 +283,7 @@ object PremiumUiHooks {
             appContext = activity.applicationContext
             currentActivityRef = WeakReference(activity)
             ensureLifecycleCallbacks(activity)
+            checkRemoteMinimumVersion(activity)
             PremiumManager.init(activity)
             if (startupBillingHelper == null) {
                 startupBillingHelper = BillingHelper(activity.applicationContext)
@@ -1208,6 +1239,395 @@ object PremiumUiHooks {
         mainHandler.post(showAction)
     }
 
+    private fun cleanRemoteConfigValue(raw: String?): String {
+        if (raw == null) return ""
+        var s = raw.trim().trim('"', '\'')
+        val colonIdx = s.indexOf(':')
+        if (colonIdx >= 0) {
+            s = s.substring(colonIdx + 1).trim().trim('"', '\'')
+        }
+        return s
+    }
+
+    private fun getCurrentAppBuildNumber(context: Context): Long {
+        return try {
+            val pkgInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                pkgInfo.longVersionCode
+            } else {
+                @Suppress("DEPRECATION")
+                pkgInfo.versionCode.toLong()
+            }
+        } catch (_: Throwable) {
+            5L
+        }
+    }
+
+    private fun getCurrentAppVersionName(context: Context): String {
+        return try {
+            val pkgInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+            pkgInfo.versionName ?: "1.0.4"
+        } catch (_: Throwable) {
+            "1.0.4"
+        }
+    }
+
+    private fun isSemanticVersionOlder(currentVersion: String, requiredVersion: String): Boolean {
+        val curParts = currentVersion.split('.').map { it.trim().toIntOrNull() ?: 0 }
+        val reqParts = requiredVersion.split('.').map { it.trim().toIntOrNull() ?: 0 }
+        val maxLen = maxOf(curParts.size, reqParts.size)
+        for (i in 0 until maxLen) {
+            val c = curParts.getOrElse(i) { 0 }
+            val r = reqParts.getOrElse(i) { 0 }
+            if (c < r) return true
+            if (c > r) return false
+        }
+        return false
+    }
+
+    private fun openPlayStoreForUpdate(context: Context) {
+        val pkgName = context.packageName.ifBlank { "com.hypnotix.iptv" }
+        try {
+            val playStoreIntent = Intent(
+                Intent.ACTION_VIEW,
+                Uri.parse("market://details?id=$pkgName")
+            ).apply {
+                setPackage("com.android.vending")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(playStoreIntent)
+            return
+        } catch (_: Throwable) {
+        }
+        try {
+            val marketIntent = Intent(
+                Intent.ACTION_VIEW,
+                Uri.parse("market://details?id=$pkgName")
+            ).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(marketIntent)
+            return
+        } catch (_: Throwable) {
+        }
+        try {
+            val webIntent = Intent(
+                Intent.ACTION_VIEW,
+                Uri.parse("https://play.google.com/store/apps/details?id=$pkgName")
+            ).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(webIntent)
+        } catch (t: Throwable) {
+            Log.e(TAG, "Failed to open Play Store for update", t)
+        }
+    }
+
+    private fun showForceUpdatePopup(contextFallback: Context? = null) {
+        mainHandler.post {
+            val activity = findActiveActivity() ?: unwrapActivity(contextFallback)
+            if (activity == null || activity.isFinishing || activity.isDestroyed) {
+                return@post
+            }
+
+            try {
+                val existingForce = activeForceUpdateDialogRef?.get()
+                val existingAct = activeForceUpdateActivityRef?.get()
+                if (existingForce != null && existingForce.isShowing && existingAct === activity) {
+                    return@post
+                }
+                if (existingForce != null && existingForce.isShowing) {
+                    existingForce.dismiss()
+                }
+            } catch (_: Throwable) {
+            }
+
+            try {
+                activeLimitDialogRef?.get()?.let { limitDlg ->
+                    if (limitDlg.isShowing) {
+                        limitDlg.dismiss()
+                    }
+                }
+            } catch (_: Throwable) {
+            }
+
+            try {
+                val isDark = isAppInDarkMode(activity)
+
+                val cardBgColor = if (isDark) {
+                    AndroidColor.parseColor("#0D0D0D")
+                } else {
+                    AndroidColor.parseColor("#FFFFFF")
+                }
+                val redAccentColor = AndroidColor.parseColor("#E50914")
+                val redDarkAccentColor = AndroidColor.parseColor("#B91C1C")
+                val badgeFillColor = if (isDark) {
+                    AndroidColor.parseColor("#26E50914")
+                } else {
+                    AndroidColor.parseColor("#1AE50914")
+                }
+                val titleTextColor = if (isDark) {
+                    AndroidColor.parseColor("#FFFFFF")
+                } else {
+                    AndroidColor.parseColor("#0D0D0D")
+                }
+                val messageTextColor = if (isDark) {
+                    AndroidColor.parseColor("#D4D4D8")
+                } else {
+                    AndroidColor.parseColor("#3F3F46")
+                }
+
+                val dialog = Dialog(activity)
+                dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+                dialog.setCancelable(false)
+                dialog.setCanceledOnTouchOutside(false)
+                dialog.setOnKeyListener { _, keyCode, _ ->
+                    keyCode == KeyEvent.KEYCODE_BACK
+                }
+
+                val rootCard = LinearLayout(activity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    gravity = Gravity.CENTER_HORIZONTAL
+                    val padH = dpToPx(activity, 24f)
+                    val padV = dpToPx(activity, 26f)
+                    setPadding(padH, padV, padH, padV)
+                    background = GradientDrawable().apply {
+                        shape = GradientDrawable.RECTANGLE
+                        cornerRadius = dpToPx(activity, 24f).toFloat()
+                        setColor(cardBgColor)
+                        setStroke(dpToPx(activity, 1.6f), redAccentColor)
+                    }
+                }
+
+                val iconBadge = TextView(activity).apply {
+                    text = "🚀"
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 28f)
+                    gravity = Gravity.CENTER
+                    background = GradientDrawable().apply {
+                        shape = GradientDrawable.OVAL
+                        setColor(badgeFillColor)
+                        setStroke(dpToPx(activity, 1.5f), redAccentColor)
+                    }
+                }
+                val badgeSize = dpToPx(activity, 64f)
+                rootCard.addView(
+                    iconBadge,
+                    LinearLayout.LayoutParams(badgeSize, badgeSize).apply {
+                        bottomMargin = dpToPx(activity, 14f)
+                    }
+                )
+
+                val tagPill = TextView(activity).apply {
+                    text = "UPDATE REQUIRED"
+                    setTextColor(redAccentColor)
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f)
+                    typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+                    gravity = Gravity.CENTER
+                    val pillH = dpToPx(activity, 10f)
+                    val pillV = dpToPx(activity, 4f)
+                    setPadding(pillH, pillV, pillH, pillV)
+                    background = GradientDrawable().apply {
+                        shape = GradientDrawable.RECTANGLE
+                        cornerRadius = dpToPx(activity, 12f).toFloat()
+                        setColor(badgeFillColor)
+                        setStroke(dpToPx(activity, 1f), redAccentColor)
+                    }
+                }
+                rootCard.addView(
+                    tagPill,
+                    LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply {
+                        bottomMargin = dpToPx(activity, 12f)
+                    }
+                )
+
+                val titleView = TextView(activity).apply {
+                    text = "App Version Outdated"
+                    setTextColor(titleTextColor)
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
+                    typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+                    gravity = Gravity.CENTER
+                }
+                rootCard.addView(
+                    titleView,
+                    LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply {
+                        bottomMargin = dpToPx(activity, 10f)
+                    }
+                )
+
+                val messageView = TextView(activity).apply {
+                    text = "This version of the app is outdated. Please update the app from Google Play Store to continue watching seamlessly."
+                    setTextColor(messageTextColor)
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+                    gravity = Gravity.CENTER
+                    setLineSpacing(dpToPx(activity, 3f).toFloat(), 1.0f)
+                }
+                rootCard.addView(
+                    messageView,
+                    LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply {
+                        bottomMargin = dpToPx(activity, 24f)
+                    }
+                )
+
+                val updateButton = TextView(activity).apply {
+                    text = "Update Now"
+                    setTextColor(AndroidColor.WHITE)
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 15.5f)
+                    typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+                    gravity = Gravity.CENTER
+                    val btnPadV = dpToPx(activity, 13.5f)
+                    setPadding(0, btnPadV, 0, btnPadV)
+                    background = GradientDrawable(
+                        GradientDrawable.Orientation.LEFT_RIGHT,
+                        intArrayOf(
+                            redAccentColor,
+                            redDarkAccentColor
+                        )
+                    ).apply {
+                        shape = GradientDrawable.RECTANGLE
+                        cornerRadius = dpToPx(activity, 25f).toFloat()
+                    }
+                    setOnClickListener {
+                        openPlayStoreForUpdate(activity)
+                    }
+                }
+                rootCard.addView(
+                    updateButton,
+                    LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    )
+                )
+
+                dialog.setContentView(rootCard)
+                dialog.window?.apply {
+                    setBackgroundDrawable(ColorDrawable(AndroidColor.TRANSPARENT))
+                    val screenWidth = activity.resources.displayMetrics.widthPixels
+                    val dialogWidth = (screenWidth * 0.88f).toInt().coerceAtMost(dpToPx(activity, 380f))
+                    setLayout(dialogWidth, ViewGroup.LayoutParams.WRAP_CONTENT)
+                    setGravity(Gravity.CENTER)
+                }
+
+                activeForceUpdateDialogRef = WeakReference(dialog)
+                activeForceUpdateActivityRef = WeakReference(activity)
+                dialog.show()
+            } catch (t: Throwable) {
+                Log.e(TAG, "Failed to show force update dialog", t)
+            }
+        }
+    }
+
+    private fun evaluateRemoteMinimumVersion(contextFallback: Context? = null) {
+        try {
+            val ctx = resolveContext() ?: contextFallback?.applicationContext ?: contextFallback ?: return
+            val frc = FirebaseRemoteConfig.getInstance()
+            val candidateKeys = listOf("Version", "version", "Minimum_version", "Min_version", "min_version")
+            var rawValue = ""
+            for (key in candidateKeys) {
+                val v = cleanRemoteConfigValue(frc.getString(key))
+                if (v.isNotEmpty()) {
+                    rawValue = v
+                    break
+                }
+            }
+
+            val prefs = ctx.getSharedPreferences("hypnotix_prefs", Context.MODE_PRIVATE)
+            if (rawValue.isNotEmpty()) {
+                prefs.edit().putString("cached_remote_min_version", rawValue).apply()
+            } else {
+                rawValue = prefs.getString("cached_remote_min_version", "") ?: ""
+            }
+
+            if (rawValue.isEmpty()) {
+                isForceUpdateRequired = false
+                return
+            }
+
+            val currentBuild = getCurrentAppBuildNumber(ctx)
+            val parsedBuild = rawValue.toLongOrNull()
+                ?: if (rawValue.contains('.') && rawValue.substringAfter('.').all { it == '0' }) {
+                    rawValue.substringBefore('.').toLongOrNull()
+                } else {
+                    null
+                }
+
+            val outdated = if (parsedBuild != null) {
+                parsedBuild > 0L && currentBuild < parsedBuild
+            } else if (rawValue.contains('.')) {
+                isSemanticVersionOlder(getCurrentAppVersionName(ctx), rawValue)
+            } else {
+                false
+            }
+
+            isForceUpdateRequired = outdated
+            if (outdated) {
+                showForceUpdatePopup(contextFallback ?: ctx)
+            } else {
+                mainHandler.post {
+                    try {
+                        activeForceUpdateDialogRef?.get()?.let { dlg ->
+                            if (dlg.isShowing) {
+                                dlg.dismiss()
+                            }
+                        }
+                        activeForceUpdateDialogRef = null
+                        activeForceUpdateActivityRef = null
+                    } catch (_: Throwable) {
+                    }
+                }
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "evaluateRemoteMinimumVersion failed", t)
+        }
+    }
+
+    @JvmStatic
+    fun checkRemoteMinimumVersion(context: Context? = null) {
+        try {
+            updateContextAndActivity(context)
+            evaluateRemoteMinimumVersion(context)
+
+            val frc = FirebaseRemoteConfig.getInstance()
+            val settings = FirebaseRemoteConfigSettings.Builder()
+                .setMinimumFetchIntervalInSeconds(0L)
+                .build()
+            frc.setConfigSettingsAsync(settings)
+
+            frc.fetchAndActivate().addOnCompleteListener {
+                evaluateRemoteMinimumVersion(findActiveActivity() ?: context)
+            }
+
+            if (!remoteVersionListenerRegistered) {
+                synchronized(this) {
+                    if (!remoteVersionListenerRegistered) {
+                        remoteVersionListenerRegistered = true
+                        frc.addOnConfigUpdateListener(object : ConfigUpdateListener {
+                            override fun onUpdate(configUpdate: ConfigUpdate) {
+                                frc.activate().addOnCompleteListener {
+                                    evaluateRemoteMinimumVersion(findActiveActivity() ?: context)
+                                }
+                            }
+
+                            override fun onError(error: FirebaseRemoteConfigException) {
+                                Log.w(TAG, "Remote config update listener error", error)
+                            }
+                        })
+                    }
+                }
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "checkRemoteMinimumVersion failed", t)
+        }
+    }
+
     @JvmStatic
     fun shouldBlockPip(activity: Activity): Boolean {
         updateContextAndActivity(activity)
@@ -1399,17 +1819,104 @@ object PremiumUiHooks {
         }
     }
 
+    @JvmStatic
+    fun isPresetDeleted(viewModel: Any?, presetId: String): Boolean {
+        try {
+            val vm = viewModel ?: discoverViewModelIfNeeded()
+            val ctx = resolveContext(vm)
+            if (vm != null) {
+                val deletedFlow = safeCall(vm, "getDeletedPresetIds") as? StateFlow<*>
+                val flowSet = deletedFlow?.value as? Collection<*>
+                if (flowSet != null) {
+                    for (item in flowSet) {
+                        if (item?.toString()?.trim() == presetId) {
+                            return true
+                        }
+                    }
+                    return false
+                }
+            }
+            if (ctx != null) {
+                val prefs = ctx.getSharedPreferences("hypnotix_prefs", Context.MODE_PRIVATE)
+                val savedSet = prefs.getStringSet("deleted_preset_ids", emptySet())
+                if (savedSet != null && savedSet.contains(presetId)) {
+                    return true
+                }
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "isPresetDeleted check failed", t)
+        }
+        return false
+    }
+
+    @JvmStatic
+    fun sanitizeRestoredPlaylist(viewModel: Any?, restored: Any?): Any? {
+        if (restored == null) return null
+        try {
+            val id = (safeCall(restored, "getId") as? String)?.trim() ?: ""
+            if (id.isEmpty()) return restored
+
+            val vm = viewModel ?: discoverViewModelIfNeeded()
+            val ctx = resolveContext(vm)
+
+            // If restored playlist is a deleted preset, fallback to All Playlists or available preset
+            if (isPresetDeleted(vm, id)) {
+                val presetCls = Class.forName("com.example.data.repository.PresetPlaylists")
+                val presetInstance = presetCls.getDeclaredField("INSTANCE").apply { isAccessible = true }.get(null)
+                // Prefer ALL
+                val allSource = safeCall(presetInstance, "getALL")
+                if (allSource != null) {
+                    return allSource
+                }
+                // Fallback to non-deleted India or Global
+                if (!isPresetDeleted(vm, "preset_india")) {
+                    return safeCall(presetInstance, "getINDIA") ?: restored
+                }
+                if (!isPresetDeleted(vm, "preset_global")) {
+                    return safeCall(presetInstance, "getGLOBAL") ?: restored
+                }
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "sanitizeRestoredPlaylist failed", t)
+        }
+        return restored
+    }
+
     @Suppress("UNCHECKED_CAST")
     private fun onPlaylistSelectedHook(viewModel: Any, source: Any) {
         try {
             ensureViewModelFlowsSubscribed(viewModel)
-            (safeGetField(viewModel, "_selectedCategory") as? MutableStateFlow<String>)?.value = "All"
-            (safeGetField(viewModel, "_channelSelectedCategory") as? MutableStateFlow<String>)?.value = "All"
-            (safeGetField(viewModel, "_selectedCountry") as? MutableStateFlow<String>)?.value = "All"
-            (safeGetField(viewModel, "_selectedLanguage") as? MutableStateFlow<String>)?.value = "All"
+            // Critical fix: Reset filters to null so ChannelListScreen does not filter channels by name "All"
+            (safeGetField(viewModel, "_selectedCategory") as? MutableStateFlow<String?>)?.value = null
+            (safeGetField(viewModel, "_channelSelectedCategory") as? MutableStateFlow<String?>)?.value = null
+            (safeGetField(viewModel, "_selectedCountry") as? MutableStateFlow<String?>)?.value = null
+            (safeGetField(viewModel, "_selectedLanguage") as? MutableStateFlow<String?>)?.value = null
+            (safeGetField(viewModel, "_searchQuery") as? MutableStateFlow<String>)?.value = ""
 
             val sourceId = safeCall(source, "getId") as? String
-            if (sourceId == "preset_all") {
+            val sourceTitle = (safeCall(source, "getTitle") as? String) ?: ""
+            val sourceUrl = (safeCall(source, "getUrl") as? String) ?: ""
+            val isPreset = (safeCall(source, "isPreset") as? Boolean) ?: false
+
+            // Save persistent selection in hypnotix_prefs
+            val ctx = resolveContext(viewModel)
+            if (ctx != null && !sourceId.isNullOrEmpty()) {
+                val prefs = ctx.getSharedPreferences("hypnotix_prefs", Context.MODE_PRIVATE)
+                prefs.edit()
+                    .putBoolean("has_selected_first_playlist", true)
+                    .putString("selected_playlist_id", sourceId)
+                    .putString("selected_playlist_title", sourceTitle)
+                    .putString("selected_playlist_url", sourceUrl)
+                    .putBoolean("selected_playlist_is_preset", isPreset)
+                    .putString("channel_selected_playlist_id", sourceId)
+                    .putString("channel_selected_playlist_title", sourceTitle)
+                    .putString("channel_selected_playlist_url", sourceUrl)
+                    .putBoolean("channel_selected_playlist_is_preset", isPreset)
+                    .apply()
+            }
+
+            // Sync custom playlists channels if ALL or custom playlist is selected
+            if (sourceId == "preset_all" || sourceId?.startsWith("custom_") == true) {
                 if (latestCustomEntities.isNotEmpty()) {
                     syncCustomPlaylistsChannels(viewModel, latestCustomEntities)
                 }
@@ -1728,8 +2235,9 @@ object PremiumUiHooks {
 
         LaunchedEffect(Unit) {
             PremiumManager.init(context)
+            checkRemoteMinimumVersion(context)
             delay(3500L)
-            if (PremiumManager.shouldShowDailyPrompt(context)) {
+            if (!isForceUpdateRequired && PremiumManager.shouldShowDailyPrompt(context)) {
                 PremiumManager.markDailyPromptShown(context)
                 SubscriptionActivity.start(context)
             }
