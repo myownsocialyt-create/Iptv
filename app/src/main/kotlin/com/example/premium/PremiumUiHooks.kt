@@ -65,9 +65,14 @@ import com.google.firebase.remoteconfig.FirebaseRemoteConfig
 import com.google.firebase.remoteconfig.FirebaseRemoteConfigException
 import com.google.firebase.remoteconfig.FirebaseRemoteConfigSettings
 import java.lang.ref.WeakReference
+import java.net.HttpURLConnection
+import java.net.URL
 import java.util.Collections
+import java.util.Locale
+import java.util.UUID
 import java.util.WeakHashMap
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -77,6 +82,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import org.json.JSONObject
 
 // Do not enable minify without keep rules for reflected ViewModel/Channel getters.
 object PremiumUiHooks {
@@ -115,6 +121,14 @@ object PremiumUiHooks {
 
     @Volatile
     private var remoteVersionListenerRegistered: Boolean = false
+
+    private val remoteRestFetchInFlight = AtomicBoolean(false)
+
+    @Volatile
+    private var periodicRemoteCheckStarted: Boolean = false
+
+    @Volatile
+    private var lastAppliedAdConfigSignature: String? = null
 
     private val observedViewModels = Collections.newSetFromMap(WeakHashMap<Any, Boolean>())
 
@@ -1525,67 +1539,228 @@ object PremiumUiHooks {
         }
     }
 
+    private fun applyRemoteVersionString(ctx: Context, rawValue: String, contextFallback: Context? = null) {
+        if (rawValue.isEmpty()) {
+            isForceUpdateRequired = false
+            mainHandler.post {
+                try {
+                    activeForceUpdateDialogRef?.get()?.let { dlg ->
+                        if (dlg.isShowing) {
+                            dlg.dismiss()
+                        }
+                    }
+                    activeForceUpdateDialogRef = null
+                    activeForceUpdateActivityRef = null
+                } catch (_: Throwable) {
+                }
+            }
+            return
+        }
+
+        val currentBuild = getCurrentAppBuildNumber(ctx)
+        val parsedBuild = rawValue.toLongOrNull()
+            ?: if (rawValue.contains('.') && rawValue.substringAfter('.').all { it == '0' }) {
+                rawValue.substringBefore('.').toLongOrNull()
+            } else {
+                null
+            }
+
+        // Trigger force update whenever Firebase Remote Config Version does not match current build
+        // (covers both Version=4 on build 5 and Version=6 on build 5, while Version=5 runs normally).
+        val outdated = if (parsedBuild != null) {
+            parsedBuild > 0L && currentBuild != parsedBuild
+        } else if (rawValue.contains('.')) {
+            val currentVerName = getCurrentAppVersionName(ctx).trim()
+            currentVerName != rawValue.trim() || isSemanticVersionOlder(currentVerName, rawValue)
+        } else {
+            false
+        }
+
+        isForceUpdateRequired = outdated
+        if (outdated) {
+            val targetCtx = contextFallback ?: ctx
+            showForceUpdatePopup(targetCtx)
+            mainHandler.postDelayed({
+                if (isForceUpdateRequired) {
+                    showForceUpdatePopup(findActiveActivity() ?: targetCtx)
+                }
+            }, 600L)
+            mainHandler.postDelayed({
+                if (isForceUpdateRequired) {
+                    showForceUpdatePopup(findActiveActivity() ?: targetCtx)
+                }
+            }, 1600L)
+        } else {
+            mainHandler.post {
+                try {
+                    activeForceUpdateDialogRef?.get()?.let { dlg ->
+                        if (dlg.isShowing) {
+                            dlg.dismiss()
+                        }
+                    }
+                    activeForceUpdateDialogRef = null
+                    activeForceUpdateActivityRef = null
+                } catch (_: Throwable) {
+                }
+            }
+        }
+    }
+
     private fun evaluateRemoteMinimumVersion(contextFallback: Context? = null) {
         try {
             val ctx = resolveContext() ?: contextFallback?.applicationContext ?: contextFallback ?: return
-            val frc = FirebaseRemoteConfig.getInstance()
-            val candidateKeys = listOf("Version", "version", "Minimum_version", "Min_version", "min_version")
+            val prefs = ctx.getSharedPreferences("hypnotix_prefs", Context.MODE_PRIVATE)
             var rawValue = ""
-            for (key in candidateKeys) {
-                val v = cleanRemoteConfigValue(frc.getString(key))
-                if (v.isNotEmpty()) {
-                    rawValue = v
-                    break
+
+            try {
+                val frc = FirebaseRemoteConfig.getInstance()
+                val candidateKeys = listOf("Version", "version", "Minimum_version", "Min_version", "min_version")
+                for (key in candidateKeys) {
+                    val v = cleanRemoteConfigValue(frc.getString(key))
+                    if (v.isNotEmpty()) {
+                        rawValue = v
+                        break
+                    }
                 }
+            } catch (_: Throwable) {
             }
 
-            val prefs = ctx.getSharedPreferences("hypnotix_prefs", Context.MODE_PRIVATE)
             if (rawValue.isNotEmpty()) {
                 prefs.edit().putString("cached_remote_min_version", rawValue).apply()
             } else {
                 rawValue = prefs.getString("cached_remote_min_version", "") ?: ""
             }
 
-            if (rawValue.isEmpty()) {
-                isForceUpdateRequired = false
-                return
-            }
+            applyRemoteVersionString(ctx, rawValue, contextFallback)
+        } catch (t: Throwable) {
+            Log.w(TAG, "evaluateRemoteMinimumVersion failed", t)
+        }
+    }
 
-            val currentBuild = getCurrentAppBuildNumber(ctx)
-            val parsedBuild = rawValue.toLongOrNull()
-                ?: if (rawValue.contains('.') && rawValue.substringAfter('.').all { it == '0' }) {
-                    rawValue.substringBefore('.').toLongOrNull()
-                } else {
-                    null
+    private fun fetchRemoteConfigDirectlyViaRest(contextFallback: Context? = null) {
+        val ctx = resolveContext() ?: contextFallback?.applicationContext ?: contextFallback ?: return
+        if (!remoteRestFetchInFlight.compareAndSet(false, true)) return
+
+        ioScope.launch {
+            try {
+                val prefs = ctx.getSharedPreferences("hypnotix_prefs", Context.MODE_PRIVATE)
+                var appInstanceId = prefs.getString("rc_app_instance_id", null)
+                if (appInstanceId.isNullOrBlank()) {
+                    appInstanceId = UUID.randomUUID().toString().replace("-", "")
+                    prefs.edit().putString("rc_app_instance_id", appInstanceId).apply()
                 }
 
-            val outdated = if (parsedBuild != null) {
-                parsedBuild > 0L && currentBuild < parsedBuild
-            } else if (rawValue.contains('.')) {
-                isSemanticVersionOlder(getCurrentAppVersionName(ctx), rawValue)
-            } else {
-                false
-            }
+                val endpoint = "https://firebaseremoteconfig.googleapis.com/v1/projects/80080000257/namespaces/firebase:fetch?key=AIzaSyDGNKZ3KG5ANDVTolipmoSpNqXxH5RBM1M"
+                val conn = (URL(endpoint).openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    connectTimeout = 8000
+                    readTimeout = 8000
+                    doOutput = true
+                    setRequestProperty("Content-Type", "application/json; charset=UTF-8")
+                    setRequestProperty("Accept", "application/json")
+                }
 
-            isForceUpdateRequired = outdated
-            if (outdated) {
-                showForceUpdatePopup(contextFallback ?: ctx)
-            } else {
-                mainHandler.post {
-                    try {
-                        activeForceUpdateDialogRef?.get()?.let { dlg ->
-                            if (dlg.isShowing) {
-                                dlg.dismiss()
+                val payload = JSONObject().apply {
+                    put("appId", "1:80080000257:android:4adeafddb941d467ba7700")
+                    put("appInstanceId", appInstanceId)
+                    put("packageName", ctx.packageName.ifBlank { "com.hypnotix.iptv" })
+                }.toString()
+
+                conn.outputStream.use { os ->
+                    os.write(payload.toByteArray(Charsets.UTF_8))
+                }
+
+                val code = conn.responseCode
+                if (code in 200..299) {
+                    val body = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+                    val root = JSONObject(body)
+                    val entries = root.optJSONObject("entries")
+                    if (entries != null) {
+                        val versionKeys = listOf("Version", "version", "Minimum_version", "Min_version", "min_version")
+                        var remoteVersionVal = ""
+                        for (k in versionKeys) {
+                            if (entries.has(k)) {
+                                val cleaned = cleanRemoteConfigValue(entries.optString(k, ""))
+                                if (cleaned.isNotEmpty()) {
+                                    remoteVersionVal = cleaned
+                                    break
+                                }
                             }
                         }
-                        activeForceUpdateDialogRef = null
-                        activeForceUpdateActivityRef = null
+
+                        if (remoteVersionVal.isNotEmpty()) {
+                            prefs.edit().putString("cached_remote_min_version", remoteVersionVal).apply()
+                        } else {
+                            prefs.edit().remove("cached_remote_min_version").apply()
+                        }
+
+                        applyRemoteVersionString(ctx, remoteVersionVal, findActiveActivity() ?: contextFallback)
+
+                        // Also sync Show_ads and Ad Unit IDs from live Remote Config entries
+                        try {
+                            val showAdsRaw = cleanRemoteConfigValue(
+                                entries.optString("Show_ads", entries.optString("show_ads", "true"))
+                            ).lowercase(Locale.US)
+                            val showAds = showAdsRaw in listOf("true", "1", "yes", "on")
+                            val pubIdRaw = cleanRemoteConfigValue(
+                                entries.optString("Pub_id", entries.optString("pub_id", ""))
+                            ).ifEmpty { "ca-app-pub-3940256099942544~3347511713" }
+                            val appOpenRaw = cleanRemoteConfigValue(
+                                entries.optString("App_open", entries.optString("app_open", ""))
+                            ).ifEmpty { "ca-app-pub-3940256099942544/9257395921" }
+                            val interRaw = cleanRemoteConfigValue(
+                                entries.optString("Interstitial", entries.optString("interstitial", ""))
+                            ).ifEmpty { "ca-app-pub-3940256099942544/1033173712" }
+                            val nativeRaw = cleanRemoteConfigValue(
+                                entries.optString("Native", entries.optString("native", ""))
+                            ).ifEmpty { "ca-app-pub-3940256099942544/2247696110" }
+
+                            val configSignature = "$showAds|$pubIdRaw|$appOpenRaw|$interRaw|$nativeRaw"
+                            if (configSignature != lastAppliedAdConfigSignature) {
+                                lastAppliedAdConfigSignature = configSignature
+                                val rcClass = Class.forName("com.example.fcm.HypnotixRemoteAdConfig")
+                                val applyMethod = rcClass.getMethod(
+                                    "applyToManagers",
+                                    Context::class.java,
+                                    Boolean::class.javaPrimitiveType,
+                                    String::class.java,
+                                    String::class.java,
+                                    String::class.java,
+                                    String::class.java
+                                )
+                                applyMethod.invoke(null, ctx, showAds, pubIdRaw, appOpenRaw, interRaw, nativeRaw)
+                            }
+                        } catch (t: Throwable) {
+                            Log.w(TAG, "Failed applying ad config from direct REST fetch", t)
+                        }
+                    }
+                }
+                conn.disconnect()
+            } catch (t: Throwable) {
+                Log.w(TAG, "fetchRemoteConfigDirectlyViaRest error", t)
+            } finally {
+                remoteRestFetchInFlight.set(false)
+            }
+        }
+    }
+
+    private fun ensurePeriodicRemoteConfigCheck(context: Context?) {
+        if (periodicRemoteCheckStarted) return
+        synchronized(this) {
+            if (periodicRemoteCheckStarted) return
+            periodicRemoteCheckStarted = true
+            ioScope.launch {
+                while (true) {
+                    delay(10000L)
+                    try {
+                        val act = findActiveActivity()
+                        if (act != null && !act.isFinishing && !act.isDestroyed) {
+                            fetchRemoteConfigDirectlyViaRest(act)
+                        }
                     } catch (_: Throwable) {
                     }
                 }
             }
-        } catch (t: Throwable) {
-            Log.w(TAG, "evaluateRemoteMinimumVersion failed", t)
         }
     }
 
@@ -1594,34 +1769,39 @@ object PremiumUiHooks {
         try {
             updateContextAndActivity(context)
             evaluateRemoteMinimumVersion(context)
+            fetchRemoteConfigDirectlyViaRest(context)
+            ensurePeriodicRemoteConfigCheck(context)
 
-            val frc = FirebaseRemoteConfig.getInstance()
-            val settings = FirebaseRemoteConfigSettings.Builder()
-                .setMinimumFetchIntervalInSeconds(0L)
-                .build()
-            frc.setConfigSettingsAsync(settings)
+            try {
+                val frc = FirebaseRemoteConfig.getInstance()
+                val settings = FirebaseRemoteConfigSettings.Builder()
+                    .setMinimumFetchIntervalInSeconds(0L)
+                    .build()
+                frc.setConfigSettingsAsync(settings)
 
-            frc.fetchAndActivate().addOnCompleteListener {
-                evaluateRemoteMinimumVersion(findActiveActivity() ?: context)
-            }
+                frc.fetchAndActivate().addOnCompleteListener {
+                    evaluateRemoteMinimumVersion(findActiveActivity() ?: context)
+                }
 
-            if (!remoteVersionListenerRegistered) {
-                synchronized(this) {
-                    if (!remoteVersionListenerRegistered) {
-                        remoteVersionListenerRegistered = true
-                        frc.addOnConfigUpdateListener(object : ConfigUpdateListener {
-                            override fun onUpdate(configUpdate: ConfigUpdate) {
-                                frc.activate().addOnCompleteListener {
-                                    evaluateRemoteMinimumVersion(findActiveActivity() ?: context)
+                if (!remoteVersionListenerRegistered) {
+                    synchronized(this) {
+                        if (!remoteVersionListenerRegistered) {
+                            remoteVersionListenerRegistered = true
+                            frc.addOnConfigUpdateListener(object : ConfigUpdateListener {
+                                override fun onUpdate(configUpdate: ConfigUpdate) {
+                                    frc.activate().addOnCompleteListener {
+                                        evaluateRemoteMinimumVersion(findActiveActivity() ?: context)
+                                    }
                                 }
-                            }
 
-                            override fun onError(error: FirebaseRemoteConfigException) {
-                                Log.w(TAG, "Remote config update listener error", error)
-                            }
-                        })
+                                override fun onError(error: FirebaseRemoteConfigException) {
+                                    Log.w(TAG, "Remote config update listener error", error)
+                                }
+                            })
+                        }
                     }
                 }
+            } catch (_: Throwable) {
             }
         } catch (t: Throwable) {
             Log.w(TAG, "checkRemoteMinimumVersion failed", t)
