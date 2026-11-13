@@ -1565,13 +1565,13 @@ object PremiumUiHooks {
                 null
             }
 
-        // Trigger force update whenever Firebase Remote Config Version does not match current build
-        // (covers both Version=4 on build 5 and Version=6 on build 5, while Version=5 runs normally).
+        // Trigger force update ONLY when the installed app build/version is strictly lower than
+        // Firebase Remote Config Version (e.g. Version=4 -> <4 blocked, 4/5/6+ allowed).
         val outdated = if (parsedBuild != null) {
-            parsedBuild > 0L && currentBuild != parsedBuild
+            parsedBuild > 0L && currentBuild < parsedBuild
         } else if (rawValue.contains('.')) {
             val currentVerName = getCurrentAppVersionName(ctx).trim()
-            currentVerName != rawValue.trim() || isSemanticVersionOlder(currentVerName, rawValue)
+            isSemanticVersionOlder(currentVerName, rawValue)
         } else {
             false
         }
