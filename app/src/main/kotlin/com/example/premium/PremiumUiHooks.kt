@@ -2326,6 +2326,7 @@ object PremiumUiHooks {
             }
 
             if (activePlaylistBuckets.isEmpty()) {
+                outList.clear()
                 return
             }
 
@@ -2361,6 +2362,10 @@ object PremiumUiHooks {
             }
             if (presetId == "channel_filter_input" && clsName.endsWith("HypnotixSplitScreen\$7")) {
                 SplitPortraitHooks.setPendingSearchPanelTarget(viewModel)
+                return false
+            }
+            if (presetId == "\$this\$DropdownMenu" && clsName.endsWith("MainAppScreen\$25\$1\$1\$1\$6\$4")) {
+                pendingHomeDropdownTarget = viewModel
                 return false
             }
         }
@@ -2400,23 +2405,24 @@ object PremiumUiHooks {
             if (id.isEmpty()) return restored
 
             val vm = viewModel ?: discoverViewModelIfNeeded()
-            val ctx = resolveContext(vm)
+            val indiaDeleted = isPresetDeleted(vm, "preset_india")
+            val globalDeleted = isPresetDeleted(vm, "preset_global")
 
-            // If restored playlist is a deleted preset, fallback to All Playlists or available preset
+            if (indiaDeleted && globalDeleted && latestCustomEntities.isEmpty() && id.startsWith("preset_")) {
+                return createPlaylistSource("none", "Add Playlist", "", false) ?: restored
+            }
+
+            // If restored playlist is a deleted preset, fallback to available preset or All Playlists
             if (isPresetDeleted(vm, id)) {
-                val presetCls = Class.forName("com.example.data.repository.PresetPlaylists")
-                val presetInstance = presetCls.getDeclaredField("INSTANCE").apply { isAccessible = true }.get(null)
-                // Prefer ALL
-                val allSource = safeCall(presetInstance, "getALL")
+                if (!indiaDeleted) {
+                    return getPresetSourceByName("getINDIA") ?: restored
+                }
+                if (!globalDeleted) {
+                    return getPresetSourceByName("getGLOBAL") ?: restored
+                }
+                val allSource = getPresetSourceByName("getALL")
                 if (allSource != null) {
                     return allSource
-                }
-                // Fallback to non-deleted India or Global
-                if (!isPresetDeleted(vm, "preset_india")) {
-                    return safeCall(presetInstance, "getINDIA") ?: restored
-                }
-                if (!isPresetDeleted(vm, "preset_global")) {
-                    return safeCall(presetInstance, "getGLOBAL") ?: restored
                 }
             }
         } catch (t: Throwable) {
@@ -2436,14 +2442,16 @@ object PremiumUiHooks {
             (safeGetField(viewModel, "_selectedLanguage") as? MutableStateFlow<String?>)?.value = null
             (safeGetField(viewModel, "_searchQuery") as? MutableStateFlow<String>)?.value = ""
 
-            val sourceId = safeCall(source, "getId") as? String
-            val sourceTitle = (safeCall(source, "getTitle") as? String) ?: ""
-            val sourceUrl = (safeCall(source, "getUrl") as? String) ?: ""
+            val sourceId = (safeCall(source, "getId") as? String)?.trim()
+            val rawTitle = (safeCall(source, "getTitle") as? String) ?: ""
+            val rawUrl = (safeCall(source, "getUrl") as? String) ?: ""
+            val sourceTitle = rawTitle.trim().ifEmpty { "My Playlist" }
+            val sourceUrl = rawUrl.trim()
             val isPreset = (safeCall(source, "isPreset") as? Boolean) ?: false
 
             // Save persistent selection in hypnotix_prefs
             val ctx = resolveContext(viewModel)
-            if (ctx != null && !sourceId.isNullOrEmpty()) {
+            if (ctx != null && !sourceId.isNullOrEmpty() && sourceId != "none") {
                 val prefs = ctx.getSharedPreferences("hypnotix_prefs", Context.MODE_PRIVATE)
                 prefs.edit()
                     .putBoolean("has_selected_first_playlist", true)
@@ -2456,6 +2464,17 @@ object PremiumUiHooks {
                     .putString("channel_selected_playlist_url", sourceUrl)
                     .putBoolean("channel_selected_playlist_is_preset", isPreset)
                     .apply()
+            }
+
+            if (sourceId?.startsWith("custom_") == true && sourceUrl.isNotEmpty()) {
+                val customId = sourceId.removePrefix("custom_").toLongOrNull()
+                val cleanSource = createPlaylistSource(sourceId, sourceTitle, sourceUrl, false) ?: source
+                if (customId != null) {
+                    recentlySelectedCustomId = customId
+                    recentlySelectedCustomAtMs = System.currentTimeMillis()
+                    recentlySelectedCustomSource = cleanSource
+                    ensureCustomPlaylistLoaded(viewModel, customId, sourceTitle, rawUrl)
+                }
             }
 
             // Sync custom playlists channels if ALL or custom playlist is selected
@@ -2773,10 +2792,107 @@ object PremiumUiHooks {
     @androidx.compose.runtime.NonRestartableComposable
     @JvmStatic
     fun RenderHomeTopBarCrownAndDailyCheck() {
+        val dropdownTarget = pendingHomeDropdownTarget
+        if (dropdownTarget != null) {
+            pendingHomeDropdownTarget = null
+            RenderHomePlaylistDropdownItems(dropdownTarget)
+            return
+        }
         if (SplitPortraitHooks.tryRenderPendingSplitUi()) {
             return
         }
         RenderHomeTopBarCrownAndDailyCheckImpl()
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    @Composable
+    private fun RenderHomePlaylistDropdownItems(target: Any) {
+        val viewModel = safeGetField(target, "\$viewModel") ?: discoverViewModelIfNeeded()
+        val showMenuState = safeGetField(target, "\$showPlaylistMenu\$delegate") as? MutableState<Boolean>
+        val customPlaylistsDelegate = safeGetField(target, "\$customPlaylists\$delegate") as? State<*>
+
+        val deletedFlow = safeCall(viewModel, "getDeletedPresetIds") as? StateFlow<Set<String>>
+        val deletedSetState = deletedFlow?.collectAsState()
+        val deletedSet = deletedSetState?.value ?: emptySet()
+
+        val customFlow = safeCall(viewModel, "getCustomPlaylists") as? StateFlow<List<Any>>
+        val customFlowState = customFlow?.collectAsState()
+        val customList: List<Any> = customFlowState?.value
+            ?: (customPlaylistsDelegate?.value as? List<*>)?.filterNotNull()
+            ?: latestCustomEntities
+
+        val indiaAvailable = !deletedSet.contains("preset_india")
+        val globalAvailable = !deletedSet.contains("preset_global")
+        val anyAvailable = indiaAvailable || globalAvailable || customList.isNotEmpty()
+
+        val allSource = getPresetSourceByName("getALL")
+        val globalSource = getPresetSourceByName("getGLOBAL")
+        val indiaSource = getPresetSourceByName("getINDIA")
+
+        fun selectPlaylistOnVm(source: Any?) {
+            showMenuState?.value = false
+            if (viewModel == null || source == null) return
+            try {
+                val selectMethod = viewModel.javaClass.getMethod("selectPlaylist", source.javaClass)
+                selectMethod.invoke(viewModel, source)
+            } catch (_: Throwable) {
+                try {
+                    val homeMethod = viewModel.javaClass.getMethod("selectHomePlaylist", source.javaClass)
+                    homeMethod.invoke(viewModel, source)
+                } catch (_: Throwable) {
+                }
+            }
+        }
+
+        if (anyAvailable && allSource != null) {
+            DropdownMenuItem(
+                text = { Text(text = "🌐 All Playlists") },
+                onClick = { selectPlaylistOnVm(allSource) }
+            )
+        }
+
+        if (globalAvailable && globalSource != null) {
+            DropdownMenuItem(
+                text = { Text(text = "🌍 Global Channels") },
+                onClick = { selectPlaylistOnVm(globalSource) }
+            )
+        }
+
+        if (indiaAvailable && indiaSource != null) {
+            DropdownMenuItem(
+                text = { Text(text = "🇮🇳 India Channels") },
+                onClick = { selectPlaylistOnVm(indiaSource) }
+            )
+        }
+
+        for (entity in customList) {
+            val id = (safeCall(entity, "getId") as? Number)?.toLong() ?: continue
+            val title = (safeCall(entity, "getTitle") as? String)?.trim()?.ifEmpty { "My Playlist" } ?: "My Playlist"
+            val url = (safeCall(entity, "getUrl") as? String)?.trim() ?: ""
+            DropdownMenuItem(
+                text = { Text(text = "📺 $title") },
+                onClick = {
+                    val src = createPlaylistSource("custom_$id", title, url, false)
+                    selectPlaylistOnVm(src)
+                }
+            )
+        }
+
+        if (!anyAvailable) {
+            DropdownMenuItem(
+                text = { Text(text = "➕ Add Playlist") },
+                onClick = {
+                    showMenuState?.value = false
+                    if (viewModel != null) {
+                        try {
+                            val openMethod = viewModel.javaClass.getMethod("openAddPlaylist", Int::class.javaPrimitiveType)
+                            openMethod.invoke(viewModel, 0)
+                        } catch (_: Throwable) {
+                        }
+                    }
+                }
+            )
+        }
     }
 
     @Composable

@@ -650,13 +650,37 @@ object SplitPortraitHooks {
         val currentPlaylistUrl = (invokeNoArg(currentPlaylist, "getUrl") as? String) ?: ""
         val currentPlaylistTitleRaw = (invokeNoArg(currentPlaylist, "getTitle") as? String) ?: ""
 
-        val shortSwitchLabel = remember(currentPlaylistId, currentPlaylistTitleRaw, isXtreamMode, xtreamAccountName) {
-            formatShortPlaylistLabel(
-                playlistId = currentPlaylistId,
-                title = currentPlaylistTitleRaw,
-                isXtreamMode = isXtreamMode,
-                xtreamAccountName = xtreamAccountName
-            )
+        val indiaAvailable = !deletedPresetIds.contains("preset_india")
+        val globalAvailable = !deletedPresetIds.contains("preset_global")
+        val noPlaylistsAvailable = !isXtreamMode && !indiaAvailable && !globalAvailable && customPlaylists.isEmpty()
+
+        val shortSwitchLabel = remember(
+            currentPlaylistId,
+            currentPlaylistTitleRaw,
+            isXtreamMode,
+            xtreamAccountName,
+            noPlaylistsAvailable
+        ) {
+            if (noPlaylistsAvailable || currentPlaylistId == "none") {
+                "Add Playlist"
+            } else {
+                formatShortPlaylistLabel(
+                    playlistId = currentPlaylistId,
+                    title = currentPlaylistTitleRaw,
+                    isXtreamMode = isXtreamMode,
+                    xtreamAccountName = xtreamAccountName
+                )
+            }
+        }
+
+        fun openAddPlaylistDialog() {
+            val vm = discoverViewModel() ?: return
+            try {
+                val openMethod = vm.javaClass.getMethod("openAddPlaylist", Int::class.javaPrimitiveType)
+                openMethod.invoke(vm, 0)
+            } catch (t: Throwable) {
+                Log.w(TAG, "openAddPlaylist invocation failed", t)
+            }
         }
 
         BoxWithConstraints(
@@ -665,7 +689,11 @@ object SplitPortraitHooks {
                 .padding(horizontal = 12.dp, vertical = 6.dp)
         ) {
             val isVeryNarrow = maxWidth < 310.dp
-            val switchMaxWidth = if (isVeryNarrow) 86.dp else 104.dp
+            val switchMaxWidth = when {
+                shortSwitchLabel == "Add Playlist" -> if (isVeryNarrow) 108.dp else 124.dp
+                isVeryNarrow -> 86.dp
+                else -> 104.dp
+            }
             val controlHeight = 40.dp
             val reloadBtnSize = if (isVeryNarrow) 38.dp else 40.dp
 
@@ -756,7 +784,13 @@ object SplitPortraitHooks {
                             .height(controlHeight)
                             .widthIn(min = 66.dp, max = switchMaxWidth)
                             .clip(RoundedCornerShape(11.dp))
-                            .clickable { showPlaylistMenu = true }
+                            .clickable {
+                                if (noPlaylistsAvailable) {
+                                    openAddPlaylistDialog()
+                                } else {
+                                    showPlaylistMenu = true
+                                }
+                            }
                             .testTag("split_playlist_dropdown_trigger"),
                         shape = RoundedCornerShape(11.dp),
                         color = palette.tileSurface,
@@ -769,7 +803,7 @@ object SplitPortraitHooks {
                         ) {
                             Text(
                                 text = shortSwitchLabel,
-                                color = palette.textPrimary,
+                                color = if (noPlaylistsAvailable) palette.primary else palette.textPrimary,
                                 fontSize = 12.5.sp,
                                 fontWeight = FontWeight.SemiBold,
                                 maxLines = 1,
@@ -796,7 +830,7 @@ object SplitPortraitHooks {
                         val indiaSource = getPresetSource("getINDIA")
                         val globalSource = getPresetSource("getGLOBAL")
 
-                        if (allSource != null) {
+                        if (!noPlaylistsAvailable && allSource != null) {
                             val isSelected = currentPlaylistId == "preset_all"
                             PlaylistDropdownOption(
                                 label = "🌐  All Playlists",
@@ -809,7 +843,7 @@ object SplitPortraitHooks {
                             )
                         }
 
-                        if (indiaSource != null && !deletedPresetIds.contains("preset_india")) {
+                        if (indiaSource != null && indiaAvailable) {
                             val isSelected = currentPlaylistId == "preset_india"
                             PlaylistDropdownOption(
                                 label = "🇮🇳  India Channels",
@@ -822,7 +856,7 @@ object SplitPortraitHooks {
                             )
                         }
 
-                        if (globalSource != null && !deletedPresetIds.contains("preset_global")) {
+                        if (globalSource != null && globalAvailable) {
                             val isSelected = currentPlaylistId == "preset_global"
                             PlaylistDropdownOption(
                                 label = "🌍  Global Channels",
@@ -857,6 +891,18 @@ object SplitPortraitHooks {
                                     if (src != null) {
                                         onSelectPlaylist?.invoke(src)
                                     }
+                                }
+                            )
+                        }
+
+                        if (noPlaylistsAvailable) {
+                            PlaylistDropdownOption(
+                                label = "➕  Add Playlist",
+                                isSelected = false,
+                                palette = palette,
+                                onClick = {
+                                    showPlaylistMenu = false
+                                    openAddPlaylistDialog()
                                 }
                             )
                         }
@@ -1031,6 +1077,9 @@ object SplitPortraitHooks {
         isXtreamMode: Boolean,
         xtreamAccountName: String?
     ): String {
+        if (playlistId == "none" || title.equals("Add Playlist", ignoreCase = true)) {
+            return "Add Playlist"
+        }
         val raw = if (isXtreamMode && !xtreamAccountName.isNullOrBlank()) {
             xtreamAccountName.trim()
         } else {
