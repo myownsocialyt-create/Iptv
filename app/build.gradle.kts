@@ -8,13 +8,14 @@ plugins {
 android {
     namespace = "com.example"
     compileSdk = 36
+    buildToolsVersion = "36.0.0"
 
     defaultConfig {
         applicationId = "com.hypnotix.iptv"
         minSdk = 26
         targetSdk = 36
-        versionCode = 5
-        versionName = "1.0.4"
+        versionCode = 6
+        versionName = "1.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -30,10 +31,14 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = false
             signingConfig = signingConfigs.getByName("releaseConfig")
+            ndk {
+                debugSymbolLevel = "FULL"
+            }
             proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt"),
+                getDefaultProguardFile("proguard-android.txt"),
                 "proguard-rules.pro"
             )
         }
@@ -111,8 +116,35 @@ tasks.matching { it.name == "dexBuilderRelease" }.configureEach {
     }
 }
 
-tasks.matching { it.name in listOf("mergeDexRelease", "packageRelease", "buildReleasePreBundle", "packageReleaseBundle") }.configureEach {
+tasks.matching { it.name in listOf("minifyReleaseWithR8", "mergeDexRelease", "packageRelease", "buildReleasePreBundle", "packageReleaseBundle") }.configureEach {
     outputs.upToDateWhen { false }
+}
+
+tasks.matching { it.name == "minifyReleaseWithR8" }.configureEach {
+    doFirst {
+        val outDir = layout.buildDirectory.dir("intermediates/dex/release/minifyReleaseWithR8").get().asFile
+        if (outDir.exists()) {
+            outDir.listFiles()?.filter { it.name.endsWith(".dex") }?.forEach { it.delete() }
+        }
+    }
+    doLast {
+        val defaultOutDir = layout.buildDirectory.dir("intermediates/dex/release/minifyReleaseWithR8").get().asFile
+        val outDir = if (File(defaultOutDir, "classes.dex").exists()) {
+            defaultOutDir
+        } else {
+            outputs.files.files.firstOrNull { it.isDirectory && File(it, "classes.dex").exists() } ?: defaultOutDir
+        }
+        outDir.mkdirs()
+        val precompiledDir = file("precompiled-dex")
+        var nextIdx = (outDir.listFiles()?.count { it.name.endsWith(".dex") } ?: 1) + 1
+        for (i in 2..11) {
+            val srcDex = File(precompiledDir, "classes$i.dex")
+            if (srcDex.exists()) {
+                srcDex.copyTo(File(outDir, "classes$nextIdx.dex"), overwrite = true)
+                nextIdx++
+            }
+        }
+    }
 }
 
 tasks.matching { it.name == "mergeDexRelease" }.configureEach {

@@ -128,6 +128,12 @@ object PremiumUiHooks {
     private var periodicRemoteCheckStarted: Boolean = false
 
     @Volatile
+    private var hasLiveRestVersionInSession: Boolean = false
+
+    @Volatile
+    private var lastLiveRestVersion: String = ""
+
+    @Volatile
     private var lastAppliedAdConfigSignature: String? = null
 
     private val observedViewModels = Collections.newSetFromMap(WeakHashMap<Any, Boolean>())
@@ -244,18 +250,21 @@ object PremiumUiHooks {
                 override fun onActivityCreated(act: Activity, savedInstanceState: Bundle?) {
                     if (act !is SubscriptionActivity) {
                         currentActivityRef = WeakReference(act)
+                        NotificationSyncBridge.onActivityCreatedOrStarted(act)
                     }
                 }
 
                 override fun onActivityStarted(act: Activity) {
                     if (act !is SubscriptionActivity) {
                         currentActivityRef = WeakReference(act)
+                        NotificationSyncBridge.onActivityCreatedOrStarted(act)
                     }
                 }
 
                 override fun onActivityResumed(act: Activity) {
                     if (act !is SubscriptionActivity) {
                         currentActivityRef = WeakReference(act)
+                        NotificationSyncBridge.onActivityResumed(act)
                         checkRemoteMinimumVersion(act)
                         startupBillingHelper?.queryActivePurchases { isActive ->
                             if (!isActive) {
@@ -297,6 +306,8 @@ object PremiumUiHooks {
             appContext = activity.applicationContext
             currentActivityRef = WeakReference(activity)
             ensureLifecycleCallbacks(activity)
+            NotificationSyncBridge.onActivityCreatedOrStarted(activity)
+            NotificationSyncBridge.syncRemoteSourcesNow(activity)
             checkRemoteMinimumVersion(activity)
             PremiumManager.init(activity)
             if (startupBillingHelper == null) {
@@ -1256,9 +1267,12 @@ object PremiumUiHooks {
     private fun cleanRemoteConfigValue(raw: String?): String {
         if (raw == null) return ""
         var s = raw.trim().trim('"', '\'')
-        val colonIdx = s.indexOf(':')
-        if (colonIdx >= 0) {
-            s = s.substring(colonIdx + 1).trim().trim('"', '\'')
+        val sepIdx = maxOf(s.indexOf(':'), s.indexOf('='))
+        if (sepIdx >= 0) {
+            s = s.substring(sepIdx + 1).trim().trim('"', '\'')
+        }
+        if ((s.startsWith("v", ignoreCase = true)) && s.length > 1 && s[1].isDigit()) {
+            s = s.substring(1).trim()
         }
         return s
     }
@@ -1266,23 +1280,24 @@ object PremiumUiHooks {
     private fun getCurrentAppBuildNumber(context: Context): Long {
         return try {
             val pkgInfo = context.packageManager.getPackageInfo(context.packageName, 0)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            val pkgCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 pkgInfo.longVersionCode
             } else {
                 @Suppress("DEPRECATION")
                 pkgInfo.versionCode.toLong()
             }
+            if (pkgCode > 0L) pkgCode else maxOf(com.example.BuildConfig.VERSION_CODE.toLong(), 6L)
         } catch (_: Throwable) {
-            5L
+            maxOf(com.example.BuildConfig.VERSION_CODE.toLong(), 6L)
         }
     }
 
     private fun getCurrentAppVersionName(context: Context): String {
         return try {
             val pkgInfo = context.packageManager.getPackageInfo(context.packageName, 0)
-            pkgInfo.versionName ?: "1.0.4"
+            pkgInfo.versionName ?: "1.1.0"
         } catch (_: Throwable) {
-            "1.0.4"
+            "1.1.0"
         }
     }
 
@@ -1576,6 +1591,11 @@ object PremiumUiHooks {
             false
         }
 
+        Log.i(
+            TAG,
+            "Version check: currentBuild=$currentBuild, currentVer=${getCurrentAppVersionName(ctx)}, remoteRaw='$rawValue', parsedBuild=$parsedBuild, outdated=$outdated"
+        )
+
         isForceUpdateRequired = outdated
         if (outdated) {
             val targetCtx = contextFallback ?: ctx
@@ -1606,27 +1626,45 @@ object PremiumUiHooks {
         }
     }
 
-    private fun evaluateRemoteMinimumVersion(contextFallback: Context? = null) {
+    private fun evaluateRemoteMinimumVersion(
+        contextFallback: Context? = null,
+        fromSdkServerFetch: Boolean = false
+    ) {
         try {
             val ctx = resolveContext() ?: contextFallback?.applicationContext ?: contextFallback ?: return
             val prefs = ctx.getSharedPreferences("hypnotix_prefs", Context.MODE_PRIVATE)
             var rawValue = ""
 
-            try {
-                val frc = FirebaseRemoteConfig.getInstance()
-                val candidateKeys = listOf("Version", "version", "Minimum_version", "Min_version", "min_version")
-                for (key in candidateKeys) {
-                    val v = cleanRemoteConfigValue(frc.getString(key))
-                    if (v.isNotEmpty()) {
-                        rawValue = v
-                        break
-                    }
-                }
-            } catch (_: Throwable) {
+            if (hasLiveRestVersionInSession && !fromSdkServerFetch) {
+                rawValue = lastLiveRestVersion
+                applyRemoteVersionString(ctx, rawValue, contextFallback)
+                return
             }
 
-            if (rawValue.isNotEmpty()) {
-                prefs.edit().putString("cached_remote_min_version", rawValue).apply()
+            if (fromSdkServerFetch) {
+                try {
+                    val frc = FirebaseRemoteConfig.getInstance()
+                    val candidateKeys = listOf("Version", "version", "Minimum_version", "Min_version", "min_version")
+                    for (key in candidateKeys) {
+                        val v = cleanRemoteConfigValue(frc.getString(key))
+                        if (v.isNotEmpty()) {
+                            rawValue = v
+                            break
+                        }
+                    }
+                    NotificationSyncBridge.onRemoteConfigSdkReceived(ctx, frc)
+                } catch (_: Throwable) {
+                }
+
+                if (rawValue.isNotEmpty()) {
+                    prefs.edit().putString("cached_remote_min_version", rawValue).apply()
+                    lastLiveRestVersion = rawValue
+                    hasLiveRestVersionInSession = true
+                } else {
+                    prefs.edit().remove("cached_remote_min_version").apply()
+                    lastLiveRestVersion = ""
+                    hasLiveRestVersionInSession = true
+                }
             } else {
                 rawValue = prefs.getString("cached_remote_min_version", "") ?: ""
             }
@@ -1655,9 +1693,12 @@ object PremiumUiHooks {
                     requestMethod = "POST"
                     connectTimeout = 8000
                     readTimeout = 8000
+                    useCaches = false
                     doOutput = true
                     setRequestProperty("Content-Type", "application/json; charset=UTF-8")
                     setRequestProperty("Accept", "application/json")
+                    setRequestProperty("Cache-Control", "no-cache")
+                    setRequestProperty("Pragma", "no-cache")
                 }
 
                 val payload = JSONObject().apply {
@@ -1688,6 +1729,8 @@ object PremiumUiHooks {
                             }
                         }
 
+                        lastLiveRestVersion = remoteVersionVal
+                        hasLiveRestVersionInSession = true
                         if (remoteVersionVal.isNotEmpty()) {
                             prefs.edit().putString("cached_remote_min_version", remoteVersionVal).apply()
                         } else {
@@ -1733,6 +1776,7 @@ object PremiumUiHooks {
                         } catch (t: Throwable) {
                             Log.w(TAG, "Failed applying ad config from direct REST fetch", t)
                         }
+                        NotificationSyncBridge.onRemoteConfigJsonReceived(ctx, entries)
                     }
                 }
                 conn.disconnect()
@@ -1756,6 +1800,7 @@ object PremiumUiHooks {
                         val act = findActiveActivity()
                         if (act != null && !act.isFinishing && !act.isDestroyed) {
                             fetchRemoteConfigDirectlyViaRest(act)
+                            NotificationSyncBridge.syncRemoteSourcesNow(act)
                         }
                     } catch (_: Throwable) {
                     }
@@ -1777,10 +1822,17 @@ object PremiumUiHooks {
                 val settings = FirebaseRemoteConfigSettings.Builder()
                     .setMinimumFetchIntervalInSeconds(0L)
                     .build()
-                frc.setConfigSettingsAsync(settings)
-
-                frc.fetchAndActivate().addOnCompleteListener {
-                    evaluateRemoteMinimumVersion(findActiveActivity() ?: context)
+                frc.setConfigSettingsAsync(settings).addOnCompleteListener {
+                    frc.fetch(0L).addOnCompleteListener { fetchTask ->
+                        if (fetchTask.isSuccessful) {
+                            frc.activate().addOnCompleteListener {
+                                evaluateRemoteMinimumVersion(
+                                    contextFallback = findActiveActivity() ?: context,
+                                    fromSdkServerFetch = true
+                                )
+                            }
+                        }
+                    }
                 }
 
                 if (!remoteVersionListenerRegistered) {
@@ -1789,8 +1841,12 @@ object PremiumUiHooks {
                             remoteVersionListenerRegistered = true
                             frc.addOnConfigUpdateListener(object : ConfigUpdateListener {
                                 override fun onUpdate(configUpdate: ConfigUpdate) {
+                                    fetchRemoteConfigDirectlyViaRest(findActiveActivity() ?: context)
                                     frc.activate().addOnCompleteListener {
-                                        evaluateRemoteMinimumVersion(findActiveActivity() ?: context)
+                                        evaluateRemoteMinimumVersion(
+                                            contextFallback = findActiveActivity() ?: context,
+                                            fromSdkServerFetch = true
+                                        )
                                     }
                                 }
 
@@ -2001,6 +2057,17 @@ object PremiumUiHooks {
 
     @JvmStatic
     fun isPresetDeleted(viewModel: Any?, presetId: String): Boolean {
+        if (viewModel != null) {
+            val clsName = viewModel.javaClass.name
+            if (presetId == "split_refresh_playlist_button" && clsName.endsWith("HypnotixSplitScreen\$7\$2\$2")) {
+                SplitPortraitHooks.setPendingActionPanelTarget(viewModel)
+                return false
+            }
+            if (presetId == "channel_filter_input" && clsName.endsWith("HypnotixSplitScreen\$7")) {
+                SplitPortraitHooks.setPendingSearchPanelTarget(viewModel)
+                return false
+            }
+        }
         try {
             val vm = viewModel ?: discoverViewModelIfNeeded()
             val ctx = resolveContext(vm)
@@ -2407,19 +2474,46 @@ object PremiumUiHooks {
     }
 
     @Composable
+    @androidx.compose.runtime.NonRestartableComposable
     @JvmStatic
     fun RenderHomeTopBarCrownAndDailyCheck() {
+        if (SplitPortraitHooks.tryRenderPendingSplitUi()) {
+            return
+        }
+        RenderHomeTopBarCrownAndDailyCheckImpl()
+    }
+
+    @Composable
+    private fun RenderHomeTopBarCrownAndDailyCheckImpl() {
         val context = LocalContext.current
         updateContextAndActivity(context)
         val isPremium by PremiumManager.isPremiumState
+        val isCenterOpen = NotificationSyncBridge.getCenterOpenState()?.value ?: false
+        val isRefreshing = NotificationSyncBridge.getRefreshingState()?.value ?: false
+
+        LaunchedEffect(isCenterOpen) {
+            if (isCenterOpen) {
+                NotificationSyncBridge.onNotificationCenterOpened(context)
+            }
+        }
+
+        LaunchedEffect(isRefreshing) {
+            NotificationSyncBridge.onNotificationRefreshStateChanged(context, isRefreshing)
+        }
 
         LaunchedEffect(Unit) {
+            NotificationSyncBridge.ensureInitialized(context)
+            NotificationSyncBridge.pollLocalTrayAndPrefs(context)
             PremiumManager.init(context)
             checkRemoteMinimumVersion(context)
             delay(3500L)
             if (!isForceUpdateRequired && PremiumManager.shouldShowDailyPrompt(context)) {
                 PremiumManager.markDailyPromptShown(context)
                 SubscriptionActivity.start(context)
+            }
+            while (true) {
+                delay(2000L)
+                NotificationSyncBridge.pollLocalTrayAndPrefs(context)
             }
         }
 
