@@ -120,6 +120,12 @@ tasks.matching { it.name in listOf("minifyReleaseWithR8", "mergeDexRelease", "pa
     outputs.upToDateWhen { false }
 }
 
+tasks.matching { it.name == "packageRelease" }.configureEach {
+    doFirst {
+        layout.buildDirectory.dir("intermediates/incremental/packageRelease").get().asFile.deleteRecursively()
+    }
+}
+
 tasks.matching { it.name == "minifyReleaseWithR8" }.configureEach {
     doFirst {
         val outDir = layout.buildDirectory.dir("intermediates/dex/release/minifyReleaseWithR8").get().asFile

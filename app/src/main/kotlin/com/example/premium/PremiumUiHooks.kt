@@ -43,10 +43,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.State
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -144,6 +148,18 @@ object PremiumUiHooks {
 
     @Volatile
     private var latestCustomEntities: List<Any> = emptyList()
+
+    @Volatile
+    private var recentlySelectedCustomId: Long = -1L
+
+    @Volatile
+    private var recentlySelectedCustomAtMs: Long = 0L
+
+    @Volatile
+    private var recentlySelectedCustomSource: Any? = null
+
+    @Volatile
+    private var pendingHomeDropdownTarget: Any? = null
 
     @Volatile
     private var channelCopyDefaultMethod: java.lang.reflect.Method? = null
@@ -407,6 +423,16 @@ object PremiumUiHooks {
         }
     }
 
+    private fun getPresetSourceByName(getterName: String): Any? {
+        return try {
+            val presetCls = Class.forName("com.example.data.repository.PresetPlaylists")
+            val presetInstance = presetCls.getDeclaredField("INSTANCE").apply { isAccessible = true }.get(null)
+            safeCall(presetInstance, getterName)
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
     @Suppress("UNCHECKED_CAST")
     private fun pushCustomChannelsToViewModel(viewModel: Any?) {
         val vm = viewModel ?: lastKnownViewModelRef?.get() ?: return
@@ -421,8 +447,114 @@ object PremiumUiHooks {
     }
 
     @Suppress("UNCHECKED_CAST")
+    private fun ensureCustomPlaylistLoaded(
+        viewModel: Any?,
+        id: Long,
+        title: String,
+        rawUrl: String
+    ) {
+        val url = rawUrl.trim()
+        if (url.isEmpty()) return
+        val vm = viewModel ?: discoverViewModelIfNeeded()
+        val repo = getRepositoryInstance(vm) ?: return
+
+        try {
+            val repoCache = safeGetField(repo, "playlistCache") as? MutableMap<Any, Any>
+            val cachedList = (repoCache?.get(url) as? List<*>)?.filterNotNull()
+                ?: (repoCache?.get(rawUrl) as? List<*>)?.filterNotNull()
+            if (!cachedList.isNullOrEmpty()) {
+                repoCache?.put(url, cachedList)
+                customChannelsCache[id] = cachedList
+                pushCustomChannelsToViewModel(vm)
+                notifyViewModelCustomChannelsReady(vm, id, title, url)
+            }
+        } catch (_: Throwable) {
+        }
+
+        val previousUrl = customPlaylistUrls[id]
+        val existingJob = customPlaylistJobs[id]
+        if (previousUrl == url && (customChannelsCache[id]?.isNotEmpty() == true || existingJob?.isActive == true)) {
+            if (customChannelsCache[id]?.isNotEmpty() == true) {
+                notifyViewModelCustomChannelsReady(vm, id, title, url)
+            }
+            return
+        }
+
+        customPlaylistUrls[id] = url
+        existingJob?.cancel()
+
+        val job = ioScope.launch {
+            try {
+                val source = createPlaylistSource("custom_$id", title, url, false) ?: return@launch
+                val loadMethod = repo.javaClass.getMethod("loadChannels", source.javaClass)
+                val flow = loadMethod.invoke(repo, source) as? Flow<*> ?: return@launch
+                flow.collect { emitted ->
+                    val chList = (emitted as? List<*>)?.filterNotNull()
+                    if (!chList.isNullOrEmpty()) {
+                        try {
+                            val repoCache = safeGetField(repo, "playlistCache") as? MutableMap<Any, Any>
+                            repoCache?.put(url, chList)
+                            if (rawUrl != url) {
+                                repoCache?.put(rawUrl, chList)
+                            }
+                        } catch (_: Throwable) {
+                        }
+                        customChannelsCache[id] = chList
+                        pushCustomChannelsToViewModel(vm)
+                        notifyViewModelCustomChannelsReady(vm, id, title, url)
+                    }
+                }
+            } catch (t: Throwable) {
+                Log.w(TAG, "Failed loading custom playlist id=$id", t)
+            }
+        }
+        customPlaylistJobs[id] = job
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun notifyViewModelCustomChannelsReady(
+        viewModel: Any?,
+        id: Long,
+        title: String,
+        url: String
+    ) {
+        val vm = viewModel ?: discoverViewModelIfNeeded() ?: return
+        val expectedId = "custom_$id"
+        mainHandler.post {
+            try {
+                val selFlow = safeGetField(vm, "_selectedPlaylist") as? MutableStateFlow<Any?>
+                val chSelFlow = safeGetField(vm, "_channelSelectedPlaylist") as? MutableStateFlow<Any?>
+                val hasSelectedFlow = safeGetField(vm, "_hasSelectedFirstPlaylist") as? MutableStateFlow<Boolean>
+
+                val curId = (safeCall(selFlow?.value, "getId") as? String).orEmpty()
+                val chCurId = (safeCall(chSelFlow?.value, "getId") as? String).orEmpty()
+                val curUrl = (safeCall(selFlow?.value, "getUrl") as? String)?.trim().orEmpty()
+
+                val cleanSource = createPlaylistSource(expectedId, title.ifBlank { "My Playlist" }, url, false)
+
+                if (curId == "none" || curId == expectedId || curUrl == url) {
+                    hasSelectedFlow?.value = true
+                    if (cleanSource != null) {
+                        selFlow?.value = cleanSource
+                        if (chCurId == "none" || chCurId == expectedId || chCurId == curId) {
+                            chSelFlow?.value = cleanSource
+                        }
+                    }
+                }
+
+                val now = System.currentTimeMillis()
+                (safeGetField(vm, "_refreshTrigger") as? MutableStateFlow<Long>)?.value = now
+                (safeGetField(vm, "_channelRefreshTrigger") as? MutableStateFlow<Long>)?.value = now + 1L
+            } catch (t: Throwable) {
+                Log.w(TAG, "notifyViewModelCustomChannelsReady failed", t)
+            }
+        }
+    }
+
+    @Suppress("UNCHECKED_CAST")
     private fun syncCustomPlaylistsChannels(viewModel: Any?, entities: Collection<*>) {
         val repo = getRepositoryInstance(viewModel) ?: return
+        val repoCache = safeGetField(repo, "playlistCache") as? MutableMap<*, *>
         val activeIds = HashSet<Long>()
         val nonNullEntities = ArrayList<Any>()
 
@@ -435,60 +567,208 @@ object PremiumUiHooks {
             if (url.isEmpty()) continue
 
             activeIds.add(id)
-
-            // Check if already cached in PlaylistRepository.playlistCache synchronously
-            try {
-                val repoCache = safeGetField(repo, "playlistCache") as? Map<*, *>
-                val cachedList = repoCache?.get(url) as? List<Any>
-                if (!cachedList.isNullOrEmpty()) {
-                    customChannelsCache[id] = cachedList
-                }
-            } catch (_: Throwable) {
-            }
-
-            val previousUrl = customPlaylistUrls[id]
-            val existingJob = customPlaylistJobs[id]
-            if (previousUrl == url && (customChannelsCache[id]?.isNotEmpty() == true || existingJob?.isActive == true)) {
-                continue
-            }
-
-            customPlaylistUrls[id] = url
-            existingJob?.cancel()
-
-            val job = ioScope.launch {
-                try {
-                    val source = createPlaylistSource("custom_$id", title, url, false) ?: return@launch
-                    val loadMethod = repo.javaClass.getMethod("loadChannels", source.javaClass)
-                    val flow = loadMethod.invoke(repo, source) as? Flow<*> ?: return@launch
-                    flow.collect { emitted ->
-                        val chList = (emitted as? List<*>)?.filterNotNull()
-                        if (!chList.isNullOrEmpty()) {
-                            customChannelsCache[id] = chList
-                            pushCustomChannelsToViewModel(viewModel)
-                        }
-                    }
-                } catch (t: Throwable) {
-                    Log.w(TAG, "Failed loading custom playlist id=$id", t)
-                }
-            }
-            customPlaylistJobs[id] = job
+            ensureCustomPlaylistLoaded(viewModel, id, title, url)
         }
 
         latestCustomEntities = nonNullEntities
+
+        val now = System.currentTimeMillis()
+        val recentId = if (now - recentlySelectedCustomAtMs < 3000L) recentlySelectedCustomId else -1L
 
         var removedAny = false
         val iter = customChannelsCache.keys.iterator()
         while (iter.hasNext()) {
             val key = iter.next()
-            if (!activeIds.contains(key)) {
+            if (!activeIds.contains(key) && key != recentId) {
                 iter.remove()
-                customPlaylistUrls.remove(key)
+                val removedUrl = customPlaylistUrls.remove(key)
+                if (!removedUrl.isNullOrEmpty()) {
+                    try {
+                        repoCache?.remove(removedUrl)
+                    } catch (_: Throwable) {
+                    }
+                }
                 customPlaylistJobs.remove(key)?.cancel()
                 removedAny = true
             }
         }
+        val urlIter = customPlaylistUrls.keys.iterator()
+        while (urlIter.hasNext()) {
+            val key = urlIter.next()
+            if (!activeIds.contains(key) && key != recentId) {
+                val removedUrl = customPlaylistUrls.remove(key)
+                if (!removedUrl.isNullOrEmpty()) {
+                    try {
+                        repoCache?.remove(removedUrl)
+                    } catch (_: Throwable) {
+                    }
+                }
+                customPlaylistJobs.remove(key)?.cancel()
+                removedAny = true
+            }
+        }
+
         if (removedAny || customChannelsCache.isNotEmpty()) {
             pushCustomChannelsToViewModel(viewModel)
+        }
+
+        reconcileActivePlaylistSelection(viewModel, nonNullEntities)
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun reconcileActivePlaylistSelection(
+        viewModel: Any?,
+        customEntitiesOverride: List<Any>? = null
+    ) {
+        val vm = viewModel ?: discoverViewModelIfNeeded() ?: return
+        mainHandler.post {
+            try {
+                val ctx = resolveContext(vm)
+                val repo = getRepositoryInstance(vm)
+                val repoCache = safeGetField(repo, "playlistCache") as? MutableMap<*, *>
+
+                val deletedSet = HashSet<String>()
+                val deletedFlow = safeCall(vm, "getDeletedPresetIds") as? StateFlow<*>
+                val flowSet = deletedFlow?.value as? Collection<*>
+                if (flowSet != null) {
+                    for (item in flowSet) {
+                        val s = item?.toString()?.trim()
+                        if (!s.isNullOrEmpty()) deletedSet.add(s)
+                    }
+                } else if (ctx != null) {
+                    val prefs = ctx.getSharedPreferences("hypnotix_prefs", Context.MODE_PRIVATE)
+                    val saved = prefs.getStringSet("deleted_preset_ids", emptySet())
+                    if (saved != null) deletedSet.addAll(saved)
+                }
+
+                // Purge deleted preset caches from PlaylistRepository.playlistCache
+                if (deletedSet.contains("preset_india")) {
+                    try {
+                        repoCache?.remove("https://iptv-org.github.io/iptv/countries/in.m3u")
+                    } catch (_: Throwable) {
+                    }
+                }
+                if (deletedSet.contains("preset_global")) {
+                    try {
+                        repoCache?.remove("https://iptv-org.github.io/iptv/index.m3u")
+                    } catch (_: Throwable) {
+                    }
+                }
+
+                val indiaAvailable = !deletedSet.contains("preset_india")
+                val globalAvailable = !deletedSet.contains("preset_global")
+
+                val entities = customEntitiesOverride ?: latestCustomEntities
+                val customSources = ArrayList<Any>()
+                val seenIds = HashSet<String>()
+                for (entity in entities) {
+                    val id = (safeCall(entity, "getId") as? Number)?.toLong() ?: continue
+                    val title = (safeCall(entity, "getTitle") as? String)?.trim()?.ifEmpty { "My Playlist" } ?: "My Playlist"
+                    val url = (safeCall(entity, "getUrl") as? String)?.trim() ?: ""
+                    if (url.isNotEmpty()) {
+                        val srcId = "custom_$id"
+                        val src = createPlaylistSource(srcId, title, url, false)
+                        if (src != null && seenIds.add(srcId)) {
+                            customSources.add(src)
+                        }
+                    }
+                }
+
+                // Preserve newly added custom playlist within 3s window before Room Flow emits
+                val now = System.currentTimeMillis()
+                val recentSrc = recentlySelectedCustomSource
+                if (recentSrc != null && (now - recentlySelectedCustomAtMs < 3000L)) {
+                    val rId = (safeCall(recentSrc, "getId") as? String).orEmpty()
+                    if (rId.startsWith("custom_") && seenIds.add(rId)) {
+                        customSources.add(recentSrc)
+                    }
+                }
+
+                val anyAvailable = indiaAvailable || globalAvailable || customSources.isNotEmpty()
+
+                val hasSelectedFlow = safeGetField(vm, "_hasSelectedFirstPlaylist") as? MutableStateFlow<Boolean>
+                val selFlow = safeGetField(vm, "_selectedPlaylist") as? MutableStateFlow<Any?>
+                val chSelFlow = safeGetField(vm, "_channelSelectedPlaylist") as? MutableStateFlow<Any?>
+                val refreshFlow = safeGetField(vm, "_refreshTrigger") as? MutableStateFlow<Long>
+                val chRefreshFlow = safeGetField(vm, "_channelRefreshTrigger") as? MutableStateFlow<Long>
+
+                val curSource = selFlow?.value
+                val chCurSource = chSelFlow?.value
+                val curId = (safeCall(curSource, "getId") as? String)?.trim().orEmpty()
+                val chCurId = (safeCall(chCurSource, "getId") as? String)?.trim().orEmpty()
+
+                if (!anyAvailable) {
+                    // ALL playlists deleted -> Clear active playlist & channels and show "Add Playlist"
+                    val noneSource = createPlaylistSource("none", "Add Playlist", "", false)
+                    hasSelectedFlow?.value = false
+                    if (noneSource != null) {
+                        selFlow?.value = noneSource
+                        chSelFlow?.value = noneSource
+                    }
+                    (safeGetField(vm, "_selectedCategory") as? MutableStateFlow<String?>)?.value = null
+                    (safeGetField(vm, "_channelSelectedCategory") as? MutableStateFlow<String?>)?.value = null
+                    (safeGetField(vm, "_searchQuery") as? MutableStateFlow<String>)?.value = ""
+
+                    customChannelsCache.clear()
+                    customPlaylistUrls.clear()
+                    for (job in customPlaylistJobs.values) {
+                        job.cancel()
+                    }
+                    customPlaylistJobs.clear()
+                    pushCustomChannelsToViewModel(vm)
+
+                    try {
+                        repoCache?.clear()
+                    } catch (_: Throwable) {
+                    }
+
+                    if (ctx != null) {
+                        ctx.getSharedPreferences("hypnotix_prefs", Context.MODE_PRIVATE).edit()
+                            .putBoolean("has_selected_first_playlist", false)
+                            .putString("selected_playlist_id", "none")
+                            .putString("selected_playlist_title", "Add Playlist")
+                            .putString("selected_playlist_url", "")
+                            .putBoolean("selected_playlist_is_preset", false)
+                            .putString("channel_selected_playlist_id", "none")
+                            .putString("channel_selected_playlist_title", "Add Playlist")
+                            .putString("channel_selected_playlist_url", "")
+                            .putBoolean("channel_selected_playlist_is_preset", false)
+                            .apply()
+                    }
+
+                    refreshFlow?.value = now
+                    chRefreshFlow?.value = now + 1L
+                    return@post
+                }
+
+                fun isInvalid(sourceId: String): Boolean {
+                    if (sourceId.isEmpty() || sourceId == "none") return true
+                    if (sourceId == "preset_india" && !indiaAvailable) return true
+                    if (sourceId == "preset_global" && !globalAvailable) return true
+                    if (sourceId.startsWith("custom_") && !seenIds.contains(sourceId)) return true
+                    return false
+                }
+
+                val curInvalid = isInvalid(curId) || (hasSelectedFlow?.value == false)
+                val chInvalid = isInvalid(chCurId) || (hasSelectedFlow?.value == false)
+
+                if (curInvalid || chInvalid) {
+                    val replacement = customSources.lastOrNull()
+                        ?: (if (indiaAvailable) getPresetSourceByName("getINDIA") else null)
+                        ?: (if (globalAvailable) getPresetSourceByName("getGLOBAL") else null)
+                        ?: getPresetSourceByName("getALL")
+
+                    if (replacement != null) {
+                        val selectMethod = vm.javaClass.getMethod("selectPlaylist", replacement.javaClass)
+                        selectMethod.invoke(vm, replacement)
+                    }
+                } else if (curId == "preset_all" || chCurId == "preset_all") {
+                    refreshFlow?.value = now
+                    chRefreshFlow?.value = now + 1L
+                }
+            } catch (t: Throwable) {
+                Log.w(TAG, "reconcileActivePlaylistSelection failed", t)
+            }
         }
     }
 
@@ -529,7 +809,7 @@ object PremiumUiHooks {
             Log.w(TAG, "Failed subscribing to observeCustomPlaylists", t)
         }
 
-        // Keep customPlaylists, uiState, and favorites StateFlows subscribed so WhileSubscribed(5000) stays hot
+        // Keep customPlaylists, uiState, playlistChannels, channelScreenChannels, and favorites StateFlows hot
         val customFlow = safeCall(viewModel, "getCustomPlaylists") as? StateFlow<*>
         if (customFlow != null) {
             hookScope.launch {
@@ -547,6 +827,20 @@ object PremiumUiHooks {
                         }
                     }
                 }
+            }
+        }
+
+        val playlistChannelsFlow = safeCall(viewModel, "getPlaylistChannels") as? StateFlow<*>
+        if (playlistChannelsFlow != null) {
+            hookScope.launch {
+                playlistChannelsFlow.collect { }
+            }
+        }
+
+        val channelScreenChannelsFlow = safeCall(viewModel, "getChannelScreenChannels") as? StateFlow<*>
+        if (channelScreenChannelsFlow != null) {
+            hookScope.launch {
+                channelScreenChannelsFlow.collect { }
             }
         }
 
@@ -583,6 +877,7 @@ object PremiumUiHooks {
         if (deletedPresetsFlow != null) {
             hookScope.launch {
                 deletedPresetsFlow.collect {
+                    reconcileActivePlaylistSelection(viewModel)
                     val ctx = resolveContext(viewModel)
                     if (!PremiumManager.isPremium(ctx)) {
                         enforceFreeTierLimitsIfNeeded(ctx, viewModel)
@@ -591,6 +886,7 @@ object PremiumUiHooks {
             }
         }
 
+        reconcileActivePlaylistSelection(viewModel)
         val ctx = resolveContext(viewModel)
         if (!PremiumManager.isPremium(ctx)) {
             enforceFreeTierLimitsIfNeeded(ctx, viewModel)

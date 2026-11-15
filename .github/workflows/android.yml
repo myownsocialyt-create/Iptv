@@ -47,17 +47,31 @@ jobs:
             echo "$KEYSTORE_BASE64" | tr -d ' \t\r\n' | base64 -d > "$RUNNER_TEMP/release.jks"
             STORE_FILE="$RUNNER_TEMP/release.jks"
             STORE_PASS="$KEYSTORE_PASSWORD"
-            ALIAS_NAME="$KEY_ALIAS"
-            KEY_PASS="$KEY_PASSWORD"
+            KEY_PASS="${KEY_PASSWORD:-$KEYSTORE_PASSWORD}"
+            if [ -n "$KEY_ALIAS" ]; then
+              ALIAS_NAME="$KEY_ALIAS"
+            else
+              ALIAS_NAME=$(keytool -list -keystore "$STORE_FILE" -storepass "$STORE_PASS" | awk -F',' '/PrivateKeyEntry|SecretKeyEntry/{print $1; exit}' | xargs)
+            fi
+            if [ -z "$ALIAS_NAME" ] || ! keytool -list -keystore "$STORE_FILE" -storepass "$STORE_PASS" -alias "$ALIAS_NAME" >/dev/null 2>&1; then
+              echo "::error::Invalid KEYSTORE_BASE64, KEYSTORE_PASSWORD, or KEY_ALIAS secret. Keystore verification failed."
+              exit 1
+            fi
           else
-            echo "KEYSTORE_BASE64 secret not set; falling back to project debug.keystore..."
-            STORE_FILE="$GITHUB_WORKSPACE/debug.keystore"
+            echo "KEYSTORE_BASE64 secret not set; falling back to project debug keystore..."
+            if [ -f "$GITHUB_WORKSPACE/debug.keystore" ]; then
+              STORE_FILE="$GITHUB_WORKSPACE/debug.keystore"
+            else
+              tr -d ' \t\r\n' < "$GITHUB_WORKSPACE/debug.keystore.base64" | base64 -d > "$RUNNER_TEMP/debug.keystore"
+              STORE_FILE="$RUNNER_TEMP/debug.keystore"
+            fi
             STORE_PASS="android"
             ALIAS_NAME="androiddebugkey"
             KEY_PASS="android"
           fi
 
-          gradle assembleRelease bundleRelease --no-daemon --stacktrace \
+          gradle assembleRelease bundleRelease --no-daemon --stacktrace --max-workers=2 \
+            -Dorg.gradle.jvmargs="-Xmx3072m -Dfile.encoding=UTF-8" \
             -Pandroid.injected.signing.store.file="$STORE_FILE" \
             -Pandroid.injected.signing.store.password="$STORE_PASS" \
             -Pandroid.injected.signing.key.alias="$ALIAS_NAME" \

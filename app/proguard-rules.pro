@@ -22,6 +22,7 @@
 -keep class com.example.premium.BillingHelper$Companion { *; }
 -keep class com.example.premium.SubscriptionScreenKt { *; }
 -keep class com.example.premium.SplitPortraitHooks { *; }
+-keep class com.example.premium.HybridCastManager { *; }
 -keep class com.example.premium.NotificationSyncBridge { *; }
 
 -dontwarn **

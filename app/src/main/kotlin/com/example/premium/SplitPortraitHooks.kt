@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.rounded.Cast
+import androidx.compose.material.icons.rounded.CastConnected
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Fullscreen
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
@@ -54,6 +55,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -261,9 +263,20 @@ object SplitPortraitHooks {
         onFullscreenClick: () -> Unit,
         context: Context
     ) {
-        // UI-only design state for Cast & Dual (full functionality will be implemented later)
-        var castHighlighted by remember(streamUrl) { mutableStateOf(false) }
+        var showCastDialog by remember { mutableStateOf(false) }
         var dualHighlighted by remember(streamUrl) { mutableStateOf(false) }
+        val isCasting = HybridCastManager.isCastingActive
+
+        LaunchedEffect(streamUrl, channelName, category, language, logoUrl) {
+            HybridCastManager.updateCurrentChannel(
+                context = context,
+                channelName = channelName,
+                category = category,
+                language = language,
+                logoUrl = logoUrl,
+                streamUrl = streamUrl
+            )
+        }
 
         val initials = remember(channelName) {
             channelName
@@ -427,16 +440,23 @@ object SplitPortraitHooks {
                     modifier = Modifier
                         .weight(1f)
                         .testTag("split_cast_button"),
-                    icon = Icons.Rounded.Cast,
-                    label = "Cast",
-                    contentDescription = "Cast",
-                    isActive = castHighlighted,
+                    icon = if (isCasting) Icons.Rounded.CastConnected else Icons.Rounded.Cast,
+                    label = if (isCasting) "Casting" else "Cast",
+                    contentDescription = "Cast to TV",
+                    isActive = isCasting || showCastDialog,
                     activeContainer = Color(0xFFE5253B),
                     activeContent = Color.White,
                     palette = palette,
                     onClick = {
-                        castHighlighted = !castHighlighted
-                        Toast.makeText(context, "Cast feature coming soon", Toast.LENGTH_SHORT).show()
+                        HybridCastManager.updateCurrentChannel(
+                            context = context,
+                            channelName = channelName,
+                            category = category,
+                            language = language,
+                            logoUrl = logoUrl,
+                            streamUrl = streamUrl
+                        )
+                        showCastDialog = true
                     }
                 )
 
@@ -483,6 +503,22 @@ object SplitPortraitHooks {
                     activeContent = palette.primary,
                     palette = palette,
                     onClick = onFullscreenClick
+                )
+            }
+
+            if (isCasting) {
+                HybridCastManager.ActiveCastRemoteBar(
+                    context = context,
+                    isDark = palette.isDark,
+                    onOpenCastSheet = { showCastDialog = true }
+                )
+            }
+
+            if (showCastDialog) {
+                HybridCastManager.HybridCastDialog(
+                    context = context,
+                    isDark = palette.isDark,
+                    onDismiss = { showCastDialog = false }
                 )
             }
         }
