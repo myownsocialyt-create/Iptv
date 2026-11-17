@@ -367,17 +367,18 @@ object SplitPortraitHooks {
                     ) {
                         Box(
                             modifier = Modifier
-                                .clip(RoundedCornerShape(4.dp))
+                                .clip(RoundedCornerShape(3.dp))
                                 .background(Color(0xFFE5253B))
-                                .padding(horizontal = 5.dp, vertical = 1.5.dp),
+                                .padding(horizontal = 4.dp, vertical = 0.5.dp),
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
                                 text = "LIVE",
                                 color = Color.White,
-                                fontSize = 9.sp,
+                                fontSize = 7.5.sp,
+                                lineHeight = 9.sp,
                                 fontWeight = FontWeight.ExtraBold,
-                                letterSpacing = 0.4.sp,
+                                letterSpacing = 0.3.sp,
                                 maxLines = 1
                             )
                         }

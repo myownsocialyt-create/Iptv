@@ -84,6 +84,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.ViewModelStoreOwner
+import androidx.media3.common.Player
+import androidx.media3.exoplayer.ExoPlayer
 import androidx.room.RoomDatabase
 import com.google.firebase.remoteconfig.ConfigUpdate
 import com.google.firebase.remoteconfig.ConfigUpdateListener
@@ -107,6 +111,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 
@@ -164,6 +169,25 @@ object PremiumUiHooks {
 
     private val observedViewModels = Collections.newSetFromMap(WeakHashMap<Any, Boolean>())
     private val observedDerivedFlowViewModels = Collections.newSetFromMap(WeakHashMap<Any, Boolean>())
+    private val attachedPlayWhenReadyPlayers = Collections.newSetFromMap(WeakHashMap<ExoPlayer, Boolean>())
+
+    @Volatile
+    private var pipObserverJob: Job? = null
+
+    @Volatile
+    private var pausedWhileBufferingByStop: Boolean = false
+
+    @Volatile
+    private var cachedIptvViewModelClass: Class<*>? = null
+
+    @Volatile
+    private var cachedUpdatePipParamsMethod: java.lang.reflect.Method? = null
+
+    @Volatile
+    private var cachedWasPlayingField: java.lang.reflect.Field? = null
+
+    @Volatile
+    private var cachedIsPipModeStateField: java.lang.reflect.Field? = null
 
     private val customChannelsCache = ConcurrentHashMap<Long, List<Any>>()
     private val customPlaylistUrls = ConcurrentHashMap<Long, String>()
@@ -320,6 +344,7 @@ object PremiumUiHooks {
                     if (act !is SubscriptionActivity) {
                         currentActivityRef = WeakReference(act)
                         NotificationSyncBridge.onActivityCreatedOrStarted(act)
+                        onMainActivityStartedHook(act)
                     }
                 }
 
@@ -327,6 +352,9 @@ object PremiumUiHooks {
                     if (act !is SubscriptionActivity) {
                         currentActivityRef = WeakReference(act)
                         NotificationSyncBridge.onActivityResumed(act)
+                        if (isMainActivity(act) && !act.isInPictureInPictureMode) {
+                            resetStuckPipState(act)
+                        }
                         checkRemoteMinimumVersion(act)
                         startupBillingHelper?.queryActivePurchases { isActive ->
                             if (!isActive) {
@@ -345,9 +373,17 @@ object PremiumUiHooks {
                 }
 
                 override fun onActivityPaused(act: Activity) {}
-                override fun onActivityStopped(act: Activity) {}
+                override fun onActivityStopped(act: Activity) {
+                    if (isMainActivity(act)) {
+                        onMainActivityStoppedHook(act)
+                    }
+                }
                 override fun onActivitySaveInstanceState(act: Activity, outState: Bundle) {}
                 override fun onActivityDestroyed(act: Activity) {
+                    if (isMainActivity(act)) {
+                        pipObserverJob?.cancel()
+                        pipObserverJob = null
+                    }
                     val current = currentActivityRef?.get()
                     if (current === act) {
                         currentActivityRef = null
@@ -2723,6 +2759,10 @@ object PremiumUiHooks {
     fun isPresetDeleted(viewModel: Any?, presetId: String): Boolean {
         if (viewModel != null) {
             val clsName = viewModel.javaClass.name
+            if (clsName == "com.example.data.model.Channel") {
+                XtreamCoverBridge.ensureXtreamChannelCoverUrl(viewModel)
+                return false
+            }
             if (presetId == "split_refresh_playlist_button" && clsName.endsWith("HypnotixSplitScreen\$7\$2\$2")) {
                 SplitPortraitHooks.setPendingActionPanelTarget(viewModel)
                 return false
@@ -2810,6 +2850,9 @@ object PremiumUiHooks {
 
     @JvmStatic
     fun sanitizeRestoredPlaylist(viewModel: Any?, restored: Any?): Any? {
+        if (viewModel != null && viewModel.javaClass.name == "com.example.data.model.Channel") {
+            return XtreamCoverBridge.resolveCoverForChannelLogo(viewModel, restored as? String)
+        }
         if (restored == null) return null
         try {
             val id = (safeCall(restored, "getId") as? String)?.trim() ?: ""
@@ -2916,8 +2959,260 @@ object PremiumUiHooks {
         }
     }
 
+    private fun isMainActivity(act: Activity?): Boolean {
+        return act != null && act.javaClass.name == "com.example.MainActivity"
+    }
+
+    private fun resolveIptvViewModelForActivity(act: Activity): Any? {
+        return try {
+            if (!isMainActivity(act) || act !is ViewModelStoreOwner) {
+                return lastKnownViewModelRef?.get()
+            }
+            val vmClass = cachedIptvViewModelClass ?: Class.forName("com.example.ui.viewmodel.IptvViewModel").also {
+                cachedIptvViewModelClass = it
+            }
+            @Suppress("UNCHECKED_CAST")
+            ViewModelProvider(act)[vmClass as Class<androidx.lifecycle.ViewModel>]
+        } catch (_: Throwable) {
+            lastKnownViewModelRef?.get()
+        }
+    }
+
+    private fun isFullScreenOrOpenAdActive(): Boolean {
+        return try {
+            val inStreamCls = Class.forName("com.example.ad.InStreamAdManager")
+            val inStreamInst = inStreamCls.getField("INSTANCE").get(null)
+            val inStreamActive = (inStreamCls.getMethod("isFullScreenAdActive").invoke(inStreamInst) as? Boolean) == true
+            if (inStreamActive) return true
+            val adMgrCls = Class.forName("com.example.ad.AdManager")
+            val adMgrInst = adMgrCls.getField("INSTANCE").get(null)
+            (adMgrCls.getMethod("isAppOpenAdPendingOrShowing").invoke(adMgrInst) as? Boolean) == true
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    private fun getWasPlayingBeforeStop(act: Activity): Boolean {
+        return try {
+            val field = cachedWasPlayingField ?: act.javaClass.getDeclaredField("wasPlayingBeforeStop").apply {
+                isAccessible = true
+                cachedWasPlayingField = this
+            }
+            field.getBoolean(act)
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    private fun setWasPlayingBeforeStop(act: Activity, value: Boolean) {
+        try {
+            val field = cachedWasPlayingField ?: act.javaClass.getDeclaredField("wasPlayingBeforeStop").apply {
+                isAccessible = true
+                cachedWasPlayingField = this
+            }
+            field.setBoolean(act, value)
+        } catch (_: Throwable) {}
+    }
+
+    private fun resetStuckPipState(act: Activity) {
+        try {
+            val field = cachedIsPipModeStateField ?: act.javaClass.getDeclaredField("isPipModeState").apply {
+                isAccessible = true
+                cachedIsPipModeStateField = this
+            }
+            @Suppress("UNCHECKED_CAST")
+            val state = field.get(act) as? MutableState<Boolean>
+            if (state != null && state.value) {
+                state.value = false
+            }
+        } catch (_: Throwable) {}
+    }
+
+    private fun invokeUpdatePipParams(act: Activity, canEnterPip: Boolean) {
+        try {
+            val method = cachedUpdatePipParamsMethod ?: act.javaClass.getMethod("updatePipParams", Boolean::class.javaPrimitiveType).also {
+                cachedUpdatePipParamsMethod = it
+            }
+            method.invoke(act, canEnterPip)
+        } catch (_: Throwable) {}
+    }
+
+    private fun computePipEligibility(act: Activity, uiState: Any?): Boolean {
+        if (uiState == null) return false
+        val isSplit = (safeCall(uiState, "isSplitViewMode") as? Boolean) == true
+        val activeCh = safeCall(uiState, "getActiveChannel")
+        return isSplit && activeCh != null && isStreamActiveOrBuffering(act)
+    }
+
+    private fun attachPlayWhenReadyListener(act: Activity, exo: ExoPlayer?) {
+        if (exo == null) return
+        synchronized(attachedPlayWhenReadyPlayers) {
+            if (attachedPlayWhenReadyPlayers.contains(exo)) return
+            attachedPlayWhenReadyPlayers.add(exo)
+        }
+        val actRef = WeakReference(act)
+        exo.addListener(object : Player.Listener {
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                val mainAct = actRef.get() ?: return
+                if (mainAct.isFinishing || mainAct.isDestroyed) return
+                mainHandler.post {
+                    try {
+                        if (!mainAct.isFinishing && !mainAct.isDestroyed && !mainAct.isInPictureInPictureMode) {
+                            val vm = resolveIptvViewModelForActivity(mainAct)
+                            val uiState = (safeCall(vm, "getUiState") as? StateFlow<*>)?.value
+                            invokeUpdatePipParams(mainAct, computePipEligibility(mainAct, uiState))
+                        }
+                    } catch (_: Throwable) {}
+                }
+            }
+        })
+    }
+
+    private fun startOrSyncPipObserver(act: Activity) {
+        if (!isMainActivity(act)) return
+        pipObserverJob?.cancel()
+        pipObserverJob = hookScope.launch {
+            try {
+                val vm = resolveIptvViewModelForActivity(act) ?: return@launch
+                val pm = safeCall(vm, "getPlayerManager") ?: return@launch
+                val uiStateFlow = safeCall(vm, "getUiState") as? StateFlow<*> ?: return@launch
+                val isPlayingFlow = safeCall(pm, "isPlaying") as? StateFlow<*> ?: return@launch
+                val playerStateFlow = safeCall(pm, "getPlayerState") as? StateFlow<*> ?: return@launch
+                val exo = safeCall(pm, "getExoPlayer") as? ExoPlayer
+                attachPlayWhenReadyListener(act, exo)
+
+                combine(uiStateFlow, isPlayingFlow, playerStateFlow) { uiState, _, _ ->
+                    computePipEligibility(act, uiState)
+                }.collect { eligible ->
+                    mainHandler.post {
+                        try {
+                            if (!act.isFinishing && !act.isDestroyed && !act.isInPictureInPictureMode) {
+                                val latestPm = safeCall(vm, "getPlayerManager")
+                                attachPlayWhenReadyListener(act, safeCall(latestPm, "getExoPlayer") as? ExoPlayer)
+                                invokeUpdatePipParams(act, eligible)
+                            }
+                        } catch (_: Throwable) {}
+                    }
+                }
+            } catch (_: Throwable) {}
+        }
+    }
+
+    private fun onMainActivityStartedHook(act: Activity) {
+        if (!isMainActivity(act)) return
+        try {
+            if (!act.isInPictureInPictureMode) {
+                resetStuckPipState(act)
+            }
+            val vm = resolveIptvViewModelForActivity(act)
+            val pm = if (vm != null) safeCall(vm, "getPlayerManager") else null
+            val exo = if (pm != null) safeCall(pm, "getExoPlayer") as? ExoPlayer else null
+            val currentCh = if (pm != null) safeGetField(pm, "currentChannel") else null
+
+            if (pausedWhileBufferingByStop) {
+                pausedWhileBufferingByStop = false
+                if (!isFullScreenOrOpenAdActive() && pm != null && exo != null && currentCh != null) {
+                    if (exo.playbackState == Player.STATE_IDLE) {
+                        safeCall(pm, "retry")
+                    }
+                }
+            }
+            if (pm != null && exo != null && currentCh != null) {
+                val prog = safeGetField(pm, "progressUpdateRunnable") as? Runnable
+                val h = safeGetField(pm, "handler") as? Handler
+                if (prog != null && h != null) {
+                    h.removeCallbacks(prog)
+                    h.post(prog)
+                }
+            }
+        } catch (_: Throwable) {}
+        startOrSyncPipObserver(act)
+    }
+
+    private fun onMainActivityStoppedHook(act: Activity) {
+        pipObserverJob?.cancel()
+        pipObserverJob = null
+        if (act.isChangingConfigurations || act.isInPictureInPictureMode) return
+        try {
+            resetStuckPipState(act)
+            val vm = resolveIptvViewModelForActivity(act) ?: return
+            val pm = safeCall(vm, "getPlayerManager") ?: return
+            val exo = safeCall(pm, "getExoPlayer") as? ExoPlayer
+            val currentCh = safeGetField(pm, "currentChannel")
+            val isPlayingNow = ((safeCall(pm, "isPlaying") as? StateFlow<*>)?.value as? Boolean) == true
+            val stateName = ((safeCall(pm, "getPlayerState") as? StateFlow<*>)?.value)?.javaClass?.simpleName ?: ""
+            val markedWasPlaying = getWasPlayingBeforeStop(act)
+
+            val hadActiveIntent = isPlayingNow || (
+                exo?.playWhenReady == true &&
+                currentCh != null &&
+                stateName != "Error" &&
+                stateName != "Ended" &&
+                stateName != "Idle"
+            )
+
+            // Cancel any pending error-retry or slow-network step-down callbacks so stream cannot start in background
+            try {
+                safeCall(pm, "cancelBufferingWatchdogs")
+            } catch (_: Throwable) {}
+            try {
+                (safeGetField(pm, "handler") as? Handler)?.removeCallbacksAndMessages(null)
+            } catch (_: Throwable) {}
+
+            if (hadActiveIntent || exo?.playWhenReady == true || markedWasPlaying) {
+                if ((hadActiveIntent || markedWasPlaying) && !isFullScreenOrOpenAdActive()) {
+                    if (!markedWasPlaying) {
+                        setWasPlayingBeforeStop(act, true)
+                    }
+                    if (!isPlayingNow) {
+                        pausedWhileBufferingByStop = true
+                    }
+                }
+                try {
+                    safeCall(pm, "pause")
+                } catch (_: Throwable) {}
+                try {
+                    exo?.playWhenReady = false
+                } catch (_: Throwable) {}
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "onMainActivityStoppedHook failed", t)
+        }
+    }
+
+    @JvmStatic
+    fun isStreamActiveOrBuffering(activity: Activity): Boolean {
+        return try {
+            val vm = resolveIptvViewModelForActivity(activity) ?: return false
+            val pm = safeCall(vm, "getPlayerManager") ?: return false
+            val isPlayingNow = ((safeCall(pm, "isPlaying") as? StateFlow<*>)?.value as? Boolean) == true
+            if (isPlayingNow) return true
+            val currentCh = safeGetField(pm, "currentChannel") ?: return false
+            val stateName = ((safeCall(pm, "getPlayerState") as? StateFlow<*>)?.value)?.javaClass?.simpleName ?: ""
+            if (stateName == "Error" || stateName == "Idle" || stateName == "Ended") return false
+            val exo = safeCall(pm, "getExoPlayer") as? ExoPlayer
+            if (exo != null) {
+                exo.playWhenReady && (
+                    stateName == "Buffering" ||
+                    stateName == "Connecting" ||
+                    exo.playbackState == Player.STATE_BUFFERING ||
+                    exo.playbackState == Player.STATE_READY
+                )
+            } else {
+                stateName == "Buffering" || stateName == "Connecting"
+            }
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
     @JvmStatic
     fun shouldBlockPlayChannel(viewModel: Any, channel: Any): Boolean {
+        // Hook F: Called from MainActivity PiP & lifecycle checks with (MainActivity, MainActivity)
+        if (viewModel is Activity && channel === viewModel) {
+            return isStreamActiveOrBuffering(viewModel)
+        }
+
         // Hook C: Called from IptvViewModel$special$$inlined$combine$1$3.invokeSuspend with (Object[] args, ArrayList outList)
         if (viewModel is Array<*> && channel is MutableList<*>) {
             @Suppress("UNCHECKED_CAST")
