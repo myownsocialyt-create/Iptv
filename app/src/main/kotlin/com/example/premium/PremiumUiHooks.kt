@@ -30,6 +30,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -37,13 +38,27 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.BrightnessAuto
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Dns
+import androidx.compose.material.icons.filled.LightMode
+import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.LiveTv
+import androidx.compose.material.icons.filled.PlaylistAdd
+import androidx.compose.material.icons.filled.PlaylistPlay
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -52,14 +67,21 @@ import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.State
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.room.RoomDatabase
@@ -141,10 +163,13 @@ object PremiumUiHooks {
     private var lastAppliedAdConfigSignature: String? = null
 
     private val observedViewModels = Collections.newSetFromMap(WeakHashMap<Any, Boolean>())
+    private val observedDerivedFlowViewModels = Collections.newSetFromMap(WeakHashMap<Any, Boolean>())
 
     private val customChannelsCache = ConcurrentHashMap<Long, List<Any>>()
     private val customPlaylistUrls = ConcurrentHashMap<Long, String>()
     private val customPlaylistJobs = ConcurrentHashMap<Long, Job>()
+    private val notifiedCustomKeys = ConcurrentHashMap.newKeySet<String>()
+    private val recentlyDeletedCustomIds = ConcurrentHashMap<Long, Long>()
 
     @Volatile
     private var latestCustomEntities: List<Any> = emptyList()
@@ -159,7 +184,28 @@ object PremiumUiHooks {
     private var recentlySelectedCustomSource: Any? = null
 
     @Volatile
+    private var lastAutoOpenAddPopupMs: Long = 0L
+
+    @Volatile
     private var pendingHomeDropdownTarget: Any? = null
+
+    @Volatile
+    private var pendingBannerDropdownVm: Any? = null
+
+    @Volatile
+    private var pendingBannerDropdownCustomList: List<*>? = null
+
+    @Volatile
+    private var pendingBannerDropdownMenuState: MutableState<Boolean>? = null
+
+    @Volatile
+    private var pendingAppearanceTarget: Any? = null
+
+    @Volatile
+    private var mainScreenScaffoldTargetRef: WeakReference<Any>? = null
+
+    @Volatile
+    private var isReconcilingSelection: Boolean = false
 
     @Volatile
     private var channelCopyDefaultMethod: java.lang.reflect.Method? = null
@@ -446,6 +492,26 @@ object PremiumUiHooks {
         }
     }
 
+    private fun isCustomIdRecentlyDeleted(id: Long, now: Long = System.currentTimeMillis()): Boolean {
+        val expiry = recentlyDeletedCustomIds[id] ?: return false
+        if (now < expiry) return true
+        recentlyDeletedCustomIds.remove(id, expiry)
+        return false
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun bumpRefreshTriggers(viewModel: Any) {
+        val refreshFlow = safeGetField(viewModel, "_refreshTrigger") as? MutableStateFlow<Long>
+        val chRefreshFlow = safeGetField(viewModel, "_channelRefreshTrigger") as? MutableStateFlow<Long>
+        val now = System.currentTimeMillis()
+        if (refreshFlow != null) {
+            refreshFlow.value = maxOf(now, refreshFlow.value + 1L)
+        }
+        if (chRefreshFlow != null) {
+            chRefreshFlow.value = maxOf(now + 1L, chRefreshFlow.value + 1L)
+        }
+    }
+
     @Suppress("UNCHECKED_CAST")
     private fun ensureCustomPlaylistLoaded(
         viewModel: Any?,
@@ -454,7 +520,7 @@ object PremiumUiHooks {
         rawUrl: String
     ) {
         val url = rawUrl.trim()
-        if (url.isEmpty()) return
+        if (url.isEmpty() || isCustomIdRecentlyDeleted(id)) return
         val vm = viewModel ?: discoverViewModelIfNeeded()
         val repo = getRepositoryInstance(vm) ?: return
 
@@ -466,7 +532,9 @@ object PremiumUiHooks {
                 repoCache?.put(url, cachedList)
                 customChannelsCache[id] = cachedList
                 pushCustomChannelsToViewModel(vm)
-                notifyViewModelCustomChannelsReady(vm, id, title, url)
+                if (notifiedCustomKeys.add("$id|$url")) {
+                    notifyViewModelCustomChannelsReady(vm, id, title, url)
+                }
             }
         } catch (_: Throwable) {
         }
@@ -474,7 +542,7 @@ object PremiumUiHooks {
         val previousUrl = customPlaylistUrls[id]
         val existingJob = customPlaylistJobs[id]
         if (previousUrl == url && (customChannelsCache[id]?.isNotEmpty() == true || existingJob?.isActive == true)) {
-            if (customChannelsCache[id]?.isNotEmpty() == true) {
+            if (customChannelsCache[id]?.isNotEmpty() == true && notifiedCustomKeys.add("$id|$url")) {
                 notifyViewModelCustomChannelsReady(vm, id, title, url)
             }
             return
@@ -489,6 +557,9 @@ object PremiumUiHooks {
                 val loadMethod = repo.javaClass.getMethod("loadChannels", source.javaClass)
                 val flow = loadMethod.invoke(repo, source) as? Flow<*> ?: return@launch
                 flow.collect { emitted ->
+                    if (isCustomIdRecentlyDeleted(id) || customPlaylistUrls[id] != url) {
+                        return@collect
+                    }
                     val chList = (emitted as? List<*>)?.filterNotNull()
                     if (!chList.isNullOrEmpty()) {
                         try {
@@ -499,9 +570,13 @@ object PremiumUiHooks {
                             }
                         } catch (_: Throwable) {
                         }
-                        customChannelsCache[id] = chList
-                        pushCustomChannelsToViewModel(vm)
-                        notifyViewModelCustomChannelsReady(vm, id, title, url)
+                        if (!isCustomIdRecentlyDeleted(id)) {
+                            customChannelsCache[id] = chList
+                            pushCustomChannelsToViewModel(vm)
+                            if (notifiedCustomKeys.add("$id|$url")) {
+                                notifyViewModelCustomChannelsReady(vm, id, title, url)
+                            }
+                        }
                     }
                 }
             } catch (t: Throwable) {
@@ -518,10 +593,19 @@ object PremiumUiHooks {
         title: String,
         url: String
     ) {
+        if (isCustomIdRecentlyDeleted(id)) return
         val vm = viewModel ?: discoverViewModelIfNeeded() ?: return
         val expectedId = "custom_$id"
         mainHandler.post {
             try {
+                if (isCustomIdRecentlyDeleted(id)) return@post
+                val knownEntities = latestCustomEntities
+                val isStillKnown = knownEntities.any { (safeCall(it, "getId") as? Number)?.toLong() == id } ||
+                    (recentlySelectedCustomId == id && System.currentTimeMillis() - recentlySelectedCustomAtMs < 3000L)
+                if (knownEntities.isNotEmpty() && !isStillKnown) {
+                    return@post
+                }
+
                 val selFlow = safeGetField(vm, "_selectedPlaylist") as? MutableStateFlow<Any?>
                 val chSelFlow = safeGetField(vm, "_channelSelectedPlaylist") as? MutableStateFlow<Any?>
                 val hasSelectedFlow = safeGetField(vm, "_hasSelectedFirstPlaylist") as? MutableStateFlow<Boolean>
@@ -530,21 +614,38 @@ object PremiumUiHooks {
                 val chCurId = (safeCall(chSelFlow?.value, "getId") as? String).orEmpty()
                 val curUrl = (safeCall(selFlow?.value, "getUrl") as? String)?.trim().orEmpty()
 
+                val noPresetsLeft = isPresetDeleted(vm, "preset_india") && isPresetDeleted(vm, "preset_global")
                 val cleanSource = createPlaylistSource(expectedId, title.ifBlank { "My Playlist" }, url, false)
 
-                if (curId == "none" || curId == expectedId || curUrl == url) {
+                val shouldSelectHome = curId == expectedId || curUrl == url || (curId == "none" && noPresetsLeft && isStillKnown)
+                if (shouldSelectHome) {
                     hasSelectedFlow?.value = true
-                    if (cleanSource != null) {
+                    if (cleanSource != null && curId != expectedId) {
                         selFlow?.value = cleanSource
-                        if (chCurId == "none" || chCurId == expectedId || chCurId == curId) {
-                            chSelFlow?.value = cleanSource
-                        }
+                    }
+                }
+                if (chCurId == expectedId || (chCurId == "none" && noPresetsLeft && isStillKnown) || (shouldSelectHome && chCurId == curId)) {
+                    if (cleanSource != null && chCurId != expectedId) {
+                        chSelFlow?.value = cleanSource
                     }
                 }
 
+                val updatedCurId = (safeCall(selFlow?.value, "getId") as? String).orEmpty()
+                val updatedChCurId = (safeCall(chSelFlow?.value, "getId") as? String).orEmpty()
+                val homeChannels = (safeCall(vm, "getPlaylistChannels") as? StateFlow<*>)?.value as? Collection<*>
+                val chChannels = (safeCall(vm, "getChannelScreenChannels") as? StateFlow<*>)?.value as? Collection<*>
+
                 val now = System.currentTimeMillis()
-                (safeGetField(vm, "_refreshTrigger") as? MutableStateFlow<Long>)?.value = now
-                (safeGetField(vm, "_channelRefreshTrigger") as? MutableStateFlow<Long>)?.value = now + 1L
+                if (updatedCurId == expectedId && homeChannels.isNullOrEmpty()) {
+                    (safeGetField(vm, "_refreshTrigger") as? MutableStateFlow<Long>)?.let {
+                        it.value = maxOf(now, it.value + 1L)
+                    }
+                }
+                if (updatedChCurId == expectedId && chChannels.isNullOrEmpty()) {
+                    (safeGetField(vm, "_channelRefreshTrigger") as? MutableStateFlow<Long>)?.let {
+                        it.value = maxOf(now + 1L, it.value + 1L)
+                    }
+                }
             } catch (t: Throwable) {
                 Log.w(TAG, "notifyViewModelCustomChannelsReady failed", t)
             }
@@ -552,16 +653,22 @@ object PremiumUiHooks {
     }
 
     @Suppress("UNCHECKED_CAST")
-    private fun syncCustomPlaylistsChannels(viewModel: Any?, entities: Collection<*>) {
+    private fun syncCustomPlaylistsChannels(
+        viewModel: Any?,
+        entities: Collection<*>,
+        reconcileSelection: Boolean = true
+    ) {
         val repo = getRepositoryInstance(viewModel) ?: return
         val repoCache = safeGetField(repo, "playlistCache") as? MutableMap<*, *>
         val activeIds = HashSet<Long>()
         val nonNullEntities = ArrayList<Any>()
+        val now = System.currentTimeMillis()
 
         for (item in entities) {
             if (item == null) continue
-            nonNullEntities.add(item)
             val id = (safeCall(item, "getId") as? Number)?.toLong() ?: continue
+            if (isCustomIdRecentlyDeleted(id, now)) continue
+            nonNullEntities.add(item)
             val title = (safeCall(item, "getTitle") as? String)?.takeIf { it.isNotBlank() } ?: "Custom Playlist"
             val url = (safeCall(item, "getUrl") as? String)?.trim() ?: ""
             if (url.isEmpty()) continue
@@ -572,8 +679,15 @@ object PremiumUiHooks {
 
         latestCustomEntities = nonNullEntities
 
-        val now = System.currentTimeMillis()
-        val recentId = if (now - recentlySelectedCustomAtMs < 3000L) recentlySelectedCustomId else -1L
+        val recentId = if (
+            recentlySelectedCustomId > 0L &&
+            !isCustomIdRecentlyDeleted(recentlySelectedCustomId, now) &&
+            now - recentlySelectedCustomAtMs < 3000L
+        ) {
+            recentlySelectedCustomId
+        } else {
+            -1L
+        }
 
         var removedAny = false
         val iter = customChannelsCache.keys.iterator()
@@ -586,6 +700,12 @@ object PremiumUiHooks {
                     try {
                         repoCache?.remove(removedUrl)
                     } catch (_: Throwable) {
+                    }
+                }
+                val nkIter = notifiedCustomKeys.iterator()
+                while (nkIter.hasNext()) {
+                    if (nkIter.next().startsWith("${key}|")) {
+                        nkIter.remove()
                     }
                 }
                 customPlaylistJobs.remove(key)?.cancel()
@@ -603,6 +723,12 @@ object PremiumUiHooks {
                     } catch (_: Throwable) {
                     }
                 }
+                val nkIter = notifiedCustomKeys.iterator()
+                while (nkIter.hasNext()) {
+                    if (nkIter.next().startsWith("${key}|")) {
+                        nkIter.remove()
+                    }
+                }
                 customPlaylistJobs.remove(key)?.cancel()
                 removedAny = true
             }
@@ -612,17 +738,132 @@ object PremiumUiHooks {
             pushCustomChannelsToViewModel(viewModel)
         }
 
-        reconcileActivePlaylistSelection(viewModel, nonNullEntities)
+        if (reconcileSelection) {
+            reconcileActivePlaylistSelection(viewModel, nonNullEntities)
+        }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun onCustomPlaylistDeleted(viewModel: Any, customId: Long) {
+        try {
+            ensureViewModelFlowsSubscribed(viewModel)
+            val now = System.currentTimeMillis()
+            recentlyDeletedCustomIds[customId] = now + 4500L
+            if (recentlySelectedCustomId == customId) {
+                recentlySelectedCustomId = -1L
+                recentlySelectedCustomAtMs = 0L
+                recentlySelectedCustomSource = null
+            }
+
+            customPlaylistJobs.remove(customId)?.cancel()
+            customChannelsCache.remove(customId)
+            var deletedUrl = customPlaylistUrls.remove(customId)
+            val nkIter = notifiedCustomKeys.iterator()
+            while (nkIter.hasNext()) {
+                if (nkIter.next().startsWith("${customId}|")) {
+                    nkIter.remove()
+                }
+            }
+
+            val repo = getRepositoryInstance(viewModel)
+            val repoCache = safeGetField(repo, "playlistCache") as? MutableMap<*, *>
+            if (!deletedUrl.isNullOrEmpty()) {
+                try {
+                    repoCache?.remove(deletedUrl)
+                } catch (_: Throwable) {
+                }
+            }
+
+            val currentEntities: List<Any> = latestCustomEntities.ifEmpty {
+                ((safeCall(viewModel, "getCustomPlaylists") as? StateFlow<*>)?.value as? Collection<*>)
+                    ?.filterNotNull()
+                    ?: emptyList()
+            }
+            val filtered = ArrayList<Any>(currentEntities.size)
+            for (entity in currentEntities) {
+                val eid = (safeCall(entity, "getId") as? Number)?.toLong()
+                if (eid == customId) {
+                    if (deletedUrl.isNullOrEmpty()) {
+                        deletedUrl = (safeCall(entity, "getUrl") as? String)?.trim()
+                        if (!deletedUrl.isNullOrEmpty()) {
+                            try {
+                                repoCache?.remove(deletedUrl)
+                            } catch (_: Throwable) {
+                            }
+                        }
+                    }
+                    continue
+                }
+                if (eid != null && isCustomIdRecentlyDeleted(eid, now)) continue
+                filtered.add(entity)
+            }
+
+            latestCustomEntities = filtered
+            synchronized(stateLock) {
+                cachedPlaylistCount = filtered.size
+                optimisticPlaylistCount = filtered.size
+            }
+            pushCustomChannelsToViewModel(viewModel)
+            reconcileActivePlaylistSelection(
+                viewModel = viewModel,
+                customEntitiesOverride = filtered,
+                openAddPopupIfEmpty = true,
+                forceDeletedId = "custom_$customId",
+                forceDeletedUrl = deletedUrl
+            )
+        } catch (t: Throwable) {
+            Log.w(TAG, "onCustomPlaylistDeleted failed", t)
+        }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun onPresetPlaylistDeleted(viewModel: Any, presetId: String) {
+        try {
+            ensureViewModelFlowsSubscribed(viewModel)
+            val repo = getRepositoryInstance(viewModel)
+            val repoCache = safeGetField(repo, "playlistCache") as? MutableMap<*, *>
+            val presetUrl = when (presetId) {
+                "preset_india" -> "https://iptv-org.github.io/iptv/countries/in.m3u"
+                "preset_global" -> "https://iptv-org.github.io/iptv/index.m3u"
+                else -> null
+            }
+            if (!presetUrl.isNullOrEmpty()) {
+                try {
+                    repoCache?.remove(presetUrl)
+                } catch (_: Throwable) {
+                }
+            }
+            val currentEntities: List<Any> = latestCustomEntities.ifEmpty {
+                ((safeCall(viewModel, "getCustomPlaylists") as? StateFlow<*>)?.value as? Collection<*>)
+                    ?.filterNotNull()
+                    ?: emptyList()
+            }
+            reconcileActivePlaylistSelection(
+                viewModel = viewModel,
+                customEntitiesOverride = currentEntities,
+                openAddPopupIfEmpty = true,
+                forceDeletedId = presetId,
+                forceDeletedUrl = presetUrl
+            )
+        } catch (t: Throwable) {
+            Log.w(TAG, "onPresetPlaylistDeleted failed", t)
+        }
     }
 
     @Suppress("UNCHECKED_CAST")
     private fun reconcileActivePlaylistSelection(
         viewModel: Any?,
-        customEntitiesOverride: List<Any>? = null
+        customEntitiesOverride: List<Any>? = null,
+        openAddPopupIfEmpty: Boolean = false,
+        forceDeletedId: String? = null,
+        forceDeletedUrl: String? = null
     ) {
         val vm = viewModel ?: discoverViewModelIfNeeded() ?: return
-        mainHandler.post {
+        val task = Runnable {
+            if (isReconcilingSelection) return@Runnable
+            isReconcilingSelection = true
             try {
+                val now = System.currentTimeMillis()
                 val ctx = resolveContext(vm)
                 val repo = getRepositoryInstance(vm)
                 val repoCache = safeGetField(repo, "playlistCache") as? MutableMap<*, *>
@@ -639,6 +880,9 @@ object PremiumUiHooks {
                     val prefs = ctx.getSharedPreferences("hypnotix_prefs", Context.MODE_PRIVATE)
                     val saved = prefs.getStringSet("deleted_preset_ids", emptySet())
                     if (saved != null) deletedSet.addAll(saved)
+                }
+                if (forceDeletedId != null && forceDeletedId.startsWith("preset_")) {
+                    deletedSet.add(forceDeletedId)
                 }
 
                 // Purge deleted preset caches from PlaylistRepository.playlistCache
@@ -658,15 +902,20 @@ object PremiumUiHooks {
                 val indiaAvailable = !deletedSet.contains("preset_india")
                 val globalAvailable = !deletedSet.contains("preset_global")
 
-                val entities = customEntitiesOverride ?: latestCustomEntities
+                val rawEntities: List<Any> = customEntitiesOverride ?: latestCustomEntities.ifEmpty {
+                    ((safeCall(vm, "getCustomPlaylists") as? StateFlow<*>)?.value as? Collection<*>)
+                        ?.filterNotNull()
+                        ?: emptyList()
+                }
                 val customSources = ArrayList<Any>()
                 val seenIds = HashSet<String>()
-                for (entity in entities) {
+                for (entity in rawEntities) {
                     val id = (safeCall(entity, "getId") as? Number)?.toLong() ?: continue
+                    val srcId = "custom_$id"
+                    if (isCustomIdRecentlyDeleted(id, now) || srcId == forceDeletedId) continue
                     val title = (safeCall(entity, "getTitle") as? String)?.trim()?.ifEmpty { "My Playlist" } ?: "My Playlist"
                     val url = (safeCall(entity, "getUrl") as? String)?.trim() ?: ""
                     if (url.isNotEmpty()) {
-                        val srcId = "custom_$id"
                         val src = createPlaylistSource(srcId, title, url, false)
                         if (src != null && seenIds.add(srcId)) {
                             customSources.add(src)
@@ -674,12 +923,16 @@ object PremiumUiHooks {
                     }
                 }
 
-                // Preserve newly added custom playlist within 3s window before Room Flow emits
-                val now = System.currentTimeMillis()
+                // Preserve newly added custom playlist within 3s window before Room Flow emits (unless deleted)
                 val recentSrc = recentlySelectedCustomSource
-                if (recentSrc != null && (now - recentlySelectedCustomAtMs < 3000L)) {
+                if (
+                    recentSrc != null &&
+                    recentlySelectedCustomId > 0L &&
+                    !isCustomIdRecentlyDeleted(recentlySelectedCustomId, now) &&
+                    (now - recentlySelectedCustomAtMs < 3000L)
+                ) {
                     val rId = (safeCall(recentSrc, "getId") as? String).orEmpty()
-                    if (rId.startsWith("custom_") && seenIds.add(rId)) {
+                    if (rId.startsWith("custom_") && rId != forceDeletedId && seenIds.add(rId)) {
                         customSources.add(recentSrc)
                     }
                 }
@@ -689,15 +942,24 @@ object PremiumUiHooks {
                 val hasSelectedFlow = safeGetField(vm, "_hasSelectedFirstPlaylist") as? MutableStateFlow<Boolean>
                 val selFlow = safeGetField(vm, "_selectedPlaylist") as? MutableStateFlow<Any?>
                 val chSelFlow = safeGetField(vm, "_channelSelectedPlaylist") as? MutableStateFlow<Any?>
-                val refreshFlow = safeGetField(vm, "_refreshTrigger") as? MutableStateFlow<Long>
-                val chRefreshFlow = safeGetField(vm, "_channelRefreshTrigger") as? MutableStateFlow<Long>
 
                 val curSource = selFlow?.value
                 val chCurSource = chSelFlow?.value
                 val curId = (safeCall(curSource, "getId") as? String)?.trim().orEmpty()
+                val curUrl = (safeCall(curSource, "getUrl") as? String)?.trim().orEmpty()
                 val chCurId = (safeCall(chCurSource, "getId") as? String)?.trim().orEmpty()
+                val chCurUrl = (safeCall(chCurSource, "getUrl") as? String)?.trim().orEmpty()
 
                 if (!anyAvailable) {
+                    val homeChannels = (safeCall(vm, "getPlaylistChannels") as? StateFlow<*>)?.value as? Collection<*>
+                    val chChannels = (safeCall(vm, "getChannelScreenChannels") as? StateFlow<*>)?.value as? Collection<*>
+                    val wasActiveOrHasChannels =
+                        (curId.isNotEmpty() && curId != "none") ||
+                        (chCurId.isNotEmpty() && chCurId != "none") ||
+                        (hasSelectedFlow?.value == true) ||
+                        !homeChannels.isNullOrEmpty() ||
+                        !chChannels.isNullOrEmpty()
+
                     // ALL playlists deleted -> Clear active playlist & channels and show "Add Playlist"
                     val noneSource = createPlaylistSource("none", "Add Playlist", "", false)
                     hasSelectedFlow?.value = false
@@ -707,10 +969,16 @@ object PremiumUiHooks {
                     }
                     (safeGetField(vm, "_selectedCategory") as? MutableStateFlow<String?>)?.value = null
                     (safeGetField(vm, "_channelSelectedCategory") as? MutableStateFlow<String?>)?.value = null
+                    (safeGetField(vm, "_selectedCountry") as? MutableStateFlow<String?>)?.value = null
+                    (safeGetField(vm, "_selectedLanguage") as? MutableStateFlow<String?>)?.value = null
                     (safeGetField(vm, "_searchQuery") as? MutableStateFlow<String>)?.value = ""
 
                     customChannelsCache.clear()
                     customPlaylistUrls.clear()
+                    notifiedCustomKeys.clear()
+                    recentlySelectedCustomId = -1L
+                    recentlySelectedCustomAtMs = 0L
+                    recentlySelectedCustomSource = null
                     for (job in customPlaylistJobs.values) {
                         job.cancel()
                     }
@@ -736,39 +1004,89 @@ object PremiumUiHooks {
                             .apply()
                     }
 
-                    refreshFlow?.value = now
-                    chRefreshFlow?.value = now + 1L
-                    return@post
+                    if (wasActiveOrHasChannels) {
+                        bumpRefreshTriggers(vm)
+                    }
+
+                    if (openAddPopupIfEmpty && now - lastAutoOpenAddPopupMs > 600L) {
+                        lastAutoOpenAddPopupMs = now
+                        openAddPlaylistUi(vm)
+                    }
+                    return@Runnable
                 }
 
-                fun isInvalid(sourceId: String): Boolean {
-                    if (sourceId.isEmpty() || sourceId == "none") return true
+                fun isDeletedSource(sourceId: String, sourceUrl: String): Boolean {
+                    if (forceDeletedId != null && sourceId == forceDeletedId) return true
+                    if (!forceDeletedUrl.isNullOrEmpty() && sourceUrl.isNotEmpty() && sourceUrl == forceDeletedUrl) return true
                     if (sourceId == "preset_india" && !indiaAvailable) return true
                     if (sourceId == "preset_global" && !globalAvailable) return true
-                    if (sourceId.startsWith("custom_") && !seenIds.contains(sourceId)) return true
+                    if (sourceId.startsWith("custom_")) {
+                        val cid = sourceId.removePrefix("custom_").toLongOrNull()
+                        if (cid != null && isCustomIdRecentlyDeleted(cid, now)) return true
+                        if (!seenIds.contains(sourceId)) return true
+                    }
                     return false
                 }
 
-                val curInvalid = isInvalid(curId) || (hasSelectedFlow?.value == false)
-                val chInvalid = isInvalid(chCurId) || (hasSelectedFlow?.value == false)
+                val hasSelected = hasSelectedFlow?.value == true
+                val hasPresets = indiaAvailable || globalAvailable
 
-                if (curInvalid || chInvalid) {
+                // Case 1: First launch or no playlist selected yet -> preserve unselected state when presets exist
+                if (!hasSelected || curId.isEmpty() || curId == "none") {
+                    if (hasPresets) {
+                        if (isDeletedSource(curId, curUrl)) {
+                            createPlaylistSource("none", "No Playlist", "", false)?.let { selFlow?.value = it }
+                        }
+                        if (isDeletedSource(chCurId, chCurUrl)) {
+                            createPlaylistSource("none", "No Playlist", "", false)?.let { chSelFlow?.value = it }
+                        }
+                        return@Runnable
+                    }
+                    if (customSources.isNotEmpty()) {
+                        val target = customSources.last()
+                        hasSelectedFlow?.value = true
+                        selFlow?.value = target
+                        chSelFlow?.value = target
+                        val selectMethod = vm.javaClass.getMethod("selectPlaylist", target.javaClass)
+                        selectMethod.invoke(vm, target)
+                        bumpRefreshTriggers(vm)
+                    }
+                    return@Runnable
+                }
+
+                // Case 2: Active playlist exists; auto-switch immediately if the active playlist itself was deleted
+                val curDeleted = isDeletedSource(curId, curUrl)
+                val chDeleted = chCurId.isNotEmpty() && chCurId != "none" && isDeletedSource(chCurId, chCurUrl)
+                if (curDeleted || chDeleted) {
                     val replacement = customSources.lastOrNull()
                         ?: (if (indiaAvailable) getPresetSourceByName("getINDIA") else null)
                         ?: (if (globalAvailable) getPresetSourceByName("getGLOBAL") else null)
                         ?: getPresetSourceByName("getALL")
 
                     if (replacement != null) {
-                        val selectMethod = vm.javaClass.getMethod("selectPlaylist", replacement.javaClass)
-                        selectMethod.invoke(vm, replacement)
+                        if (curDeleted) {
+                            hasSelectedFlow?.value = true
+                            selFlow?.value = replacement
+                            val selectMethod = vm.javaClass.getMethod("selectPlaylist", replacement.javaClass)
+                            selectMethod.invoke(vm, replacement)
+                        } else {
+                            chSelFlow?.value = replacement
+                            val selectChMethod = vm.javaClass.getMethod("selectChannelPlaylist", replacement.javaClass)
+                            selectChMethod.invoke(vm, replacement)
+                        }
+                        bumpRefreshTriggers(vm)
                     }
-                } else if (curId == "preset_all" || chCurId == "preset_all") {
-                    refreshFlow?.value = now
-                    chRefreshFlow?.value = now + 1L
                 }
             } catch (t: Throwable) {
                 Log.w(TAG, "reconcileActivePlaylistSelection failed", t)
+            } finally {
+                isReconcilingSelection = false
             }
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            task.run()
+        } else {
+            mainHandler.post(task)
         }
     }
 
@@ -776,6 +1094,23 @@ object PremiumUiHooks {
 
     private fun ensureViewModelFlowsSubscribed(viewModel: Any) {
         lastKnownViewModelRef = WeakReference(viewModel)
+
+        val playlistChannelsFlow = safeCall(viewModel, "getPlaylistChannels") as? StateFlow<*>
+        val channelScreenChannelsFlow = safeCall(viewModel, "getChannelScreenChannels") as? StateFlow<*>
+        if (playlistChannelsFlow != null && channelScreenChannelsFlow != null) {
+            val shouldSubscribeDerived = synchronized(observedDerivedFlowViewModels) {
+                observedDerivedFlowViewModels.add(viewModel)
+            }
+            if (shouldSubscribeDerived) {
+                hookScope.launch {
+                    playlistChannelsFlow.collect { }
+                }
+                hookScope.launch {
+                    channelScreenChannelsFlow.collect { }
+                }
+            }
+        }
+
         val shouldSubscribe = synchronized(observedViewModels) {
             observedViewModels.add(viewModel)
         }
@@ -809,7 +1144,7 @@ object PremiumUiHooks {
             Log.w(TAG, "Failed subscribing to observeCustomPlaylists", t)
         }
 
-        // Keep customPlaylists, uiState, playlistChannels, channelScreenChannels, and favorites StateFlows hot
+        // Keep customPlaylists and favorites StateFlows hot
         val customFlow = safeCall(viewModel, "getCustomPlaylists") as? StateFlow<*>
         if (customFlow != null) {
             hookScope.launch {
@@ -825,33 +1160,6 @@ object PremiumUiHooks {
                                 enforceFreeTierLimitsIfNeeded(ctx, viewModel)
                             }
                         }
-                    }
-                }
-            }
-        }
-
-        val playlistChannelsFlow = safeCall(viewModel, "getPlaylistChannels") as? StateFlow<*>
-        if (playlistChannelsFlow != null) {
-            hookScope.launch {
-                playlistChannelsFlow.collect { }
-            }
-        }
-
-        val channelScreenChannelsFlow = safeCall(viewModel, "getChannelScreenChannels") as? StateFlow<*>
-        if (channelScreenChannelsFlow != null) {
-            hookScope.launch {
-                channelScreenChannelsFlow.collect { }
-            }
-        }
-
-        val uiStateFlow = safeCall(viewModel, "getUiState") as? StateFlow<*>
-        if (uiStateFlow != null) {
-            hookScope.launch {
-                uiStateFlow.collect { state ->
-                    val list = safeCall(state, "getCustomPlaylists") as? Collection<*>
-                    if (list != null && list.isNotEmpty()) {
-                        cachedPlaylistCount = list.size
-                        syncCustomPlaylistsChannels(viewModel, list)
                     }
                 }
             }
@@ -876,8 +1184,14 @@ object PremiumUiHooks {
         val deletedPresetsFlow = safeCall(viewModel, "getDeletedPresetIds") as? StateFlow<*>
         if (deletedPresetsFlow != null) {
             hookScope.launch {
+                var seenInitial = false
+                var prevHadAny = true
                 deletedPresetsFlow.collect {
-                    reconcileActivePlaylistSelection(viewModel)
+                    val anyNow = hasAnyAvailablePlaylist(viewModel)
+                    val openIfEmpty = seenInitial && prevHadAny && !anyNow
+                    seenInitial = true
+                    prevHadAny = anyNow
+                    reconcileActivePlaylistSelection(viewModel, openAddPopupIfEmpty = openIfEmpty)
                     val ctx = resolveContext(viewModel)
                     if (!PremiumManager.isPremium(ctx)) {
                         enforceFreeTierLimitsIfNeeded(ctx, viewModel)
@@ -1133,13 +1447,15 @@ object PremiumUiHooks {
             val roomDb = getRoomDatabaseInstance(context, viewModel)
             if (roomDb != null) {
                 val supportDb = try {
-                    roomDb.openHelper.writableDatabase
-                } catch (_: Throwable) {
                     roomDb.openHelper.readableDatabase
+                } catch (_: Throwable) {
+                    if (Looper.myLooper() == Looper.getMainLooper()) null else roomDb.openHelper.writableDatabase
                 }
-                supportDb.query("SELECT COUNT(*) FROM custom_playlists").use { cursor ->
-                    if (cursor.moveToFirst()) {
-                        return cursor.getInt(0)
+                if (supportDb != null) {
+                    supportDb.query("SELECT COUNT(*) FROM custom_playlists").use { cursor ->
+                        if (cursor.moveToFirst()) {
+                            return cursor.getInt(0)
+                        }
                     }
                 }
             }
@@ -1147,18 +1463,12 @@ object PremiumUiHooks {
             Log.w(TAG, "Room queryDbPlaylistCount fallback triggered", t)
         }
 
-        if (context == null) return -1
+        if (context == null || Looper.myLooper() == Looper.getMainLooper()) return -1
 
         return try {
             val dbFile = context.getDatabasePath("hypnotix_iptv_db")
             if (dbFile != null && dbFile.exists()) {
-                val flags = SQLiteDatabase.OPEN_READWRITE or SQLiteDatabase.ENABLE_WRITE_AHEAD_LOGGING
-                val db = try {
-                    SQLiteDatabase.openDatabase(dbFile.absolutePath, null, flags)
-                } catch (_: Throwable) {
-                    SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
-                }
-                db.use { sqlite ->
+                SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READONLY).use { sqlite ->
                     sqlite.rawQuery("SELECT COUNT(*) FROM custom_playlists", null).use { cursor ->
                         if (cursor.moveToFirst()) cursor.getInt(0) else -1
                     }
@@ -2265,10 +2575,6 @@ object PremiumUiHooks {
                 latestCustomEntities
             }
 
-            if (effectiveCustomEntities.isNotEmpty()) {
-                syncCustomPlaylistsChannels(vm, effectiveCustomEntities)
-            }
-
             val activePlaylistBuckets = ArrayList<List<Any>>()
 
             // 1. Collect all currently added Custom Playlists' channels
@@ -2352,6 +2658,67 @@ object PremiumUiHooks {
         }
     }
 
+    private fun hasAnyAvailablePlaylist(viewModel: Any? = null): Boolean {
+        val vm = viewModel ?: discoverViewModelIfNeeded()
+        if (!isPresetDeleted(vm, "preset_india") || !isPresetDeleted(vm, "preset_global")) {
+            return true
+        }
+        if (latestCustomEntities.isNotEmpty() || customChannelsCache.isNotEmpty()) {
+            return true
+        }
+        if (vm != null) {
+            val customFlow = safeCall(vm, "getCustomPlaylists") as? StateFlow<*>
+            val list = customFlow?.value as? Collection<*>
+            if (!list.isNullOrEmpty()) return true
+        }
+        val ctx = resolveContext(vm)
+        return queryDbPlaylistCount(ctx, vm) > 0
+    }
+
+    private fun openAddPlaylistUi(viewModel: Any? = null) {
+        val runnable = Runnable {
+            var opened = false
+            try {
+                val target = mainScreenScaffoldTargetRef?.get()
+                if (target != null) {
+                    @Suppress("UNCHECKED_CAST")
+                    val tabState = safeGetField(target, "\$addPlaylistInitialTab\$delegate") as? MutableState<Int>
+                    tabState?.value = 0
+                    @Suppress("UNCHECKED_CAST")
+                    val bottomSheetState = safeGetField(target, "\$showAddPlaylistBottomSheet\$delegate") as? MutableState<Boolean>
+                    if (bottomSheetState != null) {
+                        bottomSheetState.value = true
+                        opened = true
+                    } else {
+                        @Suppress("UNCHECKED_CAST")
+                        val screenState = safeGetField(target, "\$showAddPlaylistScreen\$delegate") as? MutableState<Boolean>
+                        if (screenState != null) {
+                            screenState.value = true
+                            opened = true
+                        }
+                    }
+                }
+            } catch (t: Throwable) {
+                Log.w(TAG, "openAddPlaylistUi via scaffold target failed", t)
+            }
+            if (!opened) {
+                val vm = viewModel ?: discoverViewModelIfNeeded()
+                if (vm != null) {
+                    try {
+                        val openMethod = vm.javaClass.getMethod("openAddPlaylist", Int::class.javaPrimitiveType)
+                        openMethod.invoke(vm, 0)
+                    } catch (_: Throwable) {
+                    }
+                }
+            }
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            runnable.run()
+        } else {
+            mainHandler.post(runnable)
+        }
+    }
+
     @JvmStatic
     fun isPresetDeleted(viewModel: Any?, presetId: String): Boolean {
         if (viewModel != null) {
@@ -2364,8 +2731,52 @@ object PremiumUiHooks {
                 SplitPortraitHooks.setPendingSearchPanelTarget(viewModel)
                 return false
             }
+            if (presetId == "top_bar_playlist_pill") {
+                pendingBannerDropdownCustomList = viewModel as? List<*>
+                return false
+            }
+            if (presetId == "SWITCH PLAYLIST") {
+                @Suppress("UNCHECKED_CAST")
+                pendingBannerDropdownMenuState = viewModel as? MutableState<Boolean>
+                return false
+            }
+            if (presetId == "\$this\$DropdownMenu" && clsName.endsWith("IptvViewModel")) {
+                pendingBannerDropdownVm = viewModel
+                return false
+            }
             if (presetId == "\$this\$DropdownMenu" && clsName.endsWith("MainAppScreen\$25\$1\$1\$1\$6\$4")) {
                 pendingHomeDropdownTarget = viewModel
+                return false
+            }
+            if (presetId == "dark_mode_switch" && clsName.endsWith("SettingsScreen\$9\$2\$1\$2\$1\$2")) {
+                pendingAppearanceTarget = viewModel
+                return false
+            }
+            if (presetId == "empty_preset_playlists" && clsName.endsWith("MainAppScreen\$25\$3")) {
+                mainScreenScaffoldTargetRef = WeakReference(viewModel)
+                return false
+            }
+            if (presetId == "start_watching_live_tv_home") {
+                val vm = discoverViewModelIfNeeded()
+                if (!hasAnyAvailablePlaylist(vm)) {
+                    openAddPlaylistUi(vm)
+                    return true
+                }
+                try {
+                    @Suppress("UNCHECKED_CAST")
+                    val navState = viewModel as? MutableState<Any?>
+                    if (navState != null) {
+                        val navCls = Class.forName("com.example.ui.components.NavigationItem")
+                        val playlistsConst = navCls.enumConstants?.firstOrNull {
+                            (it as? Enum<*>)?.name == "PLAYLISTS"
+                        }
+                        if (playlistsConst != null) {
+                            navState.value = playlistsConst
+                        }
+                    }
+                } catch (t: Throwable) {
+                    Log.w(TAG, "Failed navigating to PLAYLISTS from hook", t)
+                }
                 return false
             }
         }
@@ -2402,14 +2813,18 @@ object PremiumUiHooks {
         if (restored == null) return null
         try {
             val id = (safeCall(restored, "getId") as? String)?.trim() ?: ""
-            if (id.isEmpty()) return restored
+            if (id.isEmpty() || id == "none") return restored
 
             val vm = viewModel ?: discoverViewModelIfNeeded()
             val indiaDeleted = isPresetDeleted(vm, "preset_india")
             val globalDeleted = isPresetDeleted(vm, "preset_global")
+            val ctx = resolveContext(vm)
 
-            if (indiaDeleted && globalDeleted && latestCustomEntities.isEmpty() && id.startsWith("preset_")) {
-                return createPlaylistSource("none", "Add Playlist", "", false) ?: restored
+            if (indiaDeleted && globalDeleted && id.startsWith("preset_")) {
+                val hasCustom = latestCustomEntities.isNotEmpty() || queryDbPlaylistCount(ctx, vm) > 0
+                if (!hasCustom) {
+                    return createPlaylistSource("none", "Add Playlist", "", false) ?: restored
+                }
             }
 
             // If restored playlist is a deleted preset, fallback to available preset or All Playlists
@@ -2419,6 +2834,9 @@ object PremiumUiHooks {
                 }
                 if (!globalDeleted) {
                     return getPresetSourceByName("getGLOBAL") ?: restored
+                }
+                if (latestCustomEntities.isEmpty() && queryDbPlaylistCount(ctx, vm) <= 0) {
+                    return createPlaylistSource("none", "Add Playlist", "", false) ?: restored
                 }
                 val allSource = getPresetSourceByName("getALL")
                 if (allSource != null) {
@@ -2449,6 +2867,14 @@ object PremiumUiHooks {
             val sourceUrl = rawUrl.trim()
             val isPreset = (safeCall(source, "isPreset") as? Boolean) ?: false
 
+            // Synchronously mirror active selection BEFORE any sync/load callbacks run,
+            // preventing re-entrant reconcile loops when selectPlaylist() triggers hooks
+            if (!sourceId.isNullOrEmpty() && sourceId != "none") {
+                (safeGetField(viewModel, "_hasSelectedFirstPlaylist") as? MutableStateFlow<Boolean>)?.value = true
+                (safeGetField(viewModel, "_selectedPlaylist") as? MutableStateFlow<Any?>)?.value = source
+                (safeGetField(viewModel, "_channelSelectedPlaylist") as? MutableStateFlow<Any?>)?.value = source
+            }
+
             // Save persistent selection in hypnotix_prefs
             val ctx = resolveContext(viewModel)
             if (ctx != null && !sourceId.isNullOrEmpty() && sourceId != "none") {
@@ -2470,6 +2896,7 @@ object PremiumUiHooks {
                 val customId = sourceId.removePrefix("custom_").toLongOrNull()
                 val cleanSource = createPlaylistSource(sourceId, sourceTitle, sourceUrl, false) ?: source
                 if (customId != null) {
+                    recentlyDeletedCustomIds.remove(customId)
                     recentlySelectedCustomId = customId
                     recentlySelectedCustomAtMs = System.currentTimeMillis()
                     recentlySelectedCustomSource = cleanSource
@@ -2480,7 +2907,7 @@ object PremiumUiHooks {
             // Sync custom playlists channels if ALL or custom playlist is selected
             if (sourceId == "preset_all" || sourceId?.startsWith("custom_") == true) {
                 if (latestCustomEntities.isNotEmpty()) {
-                    syncCustomPlaylistsChannels(viewModel, latestCustomEntities)
+                    syncCustomPlaylistsChannels(viewModel, latestCustomEntities, reconcileSelection = false)
                 }
                 pushCustomChannelsToViewModel(viewModel)
             }
@@ -2509,6 +2936,20 @@ object PremiumUiHooks {
         if (channel.javaClass.name.endsWith("PlaylistSource")) {
             resolveContext(viewModel)
             onPlaylistSelectedHook(viewModel, channel)
+            return false
+        }
+
+        // Hook D: Called from IptvViewModel.deleteCustomPlaylist with (IptvViewModel, Long customId)
+        if (channel is Long) {
+            resolveContext(viewModel)
+            onCustomPlaylistDeleted(viewModel, channel)
+            return false
+        }
+
+        // Hook E: Called from IptvViewModel.deletePresetPlaylist with (IptvViewModel, String presetId)
+        if (channel is String && channel.startsWith("preset_")) {
+            resolveContext(viewModel)
+            onPresetPlaylistDeleted(viewModel, channel)
             return false
         }
 
@@ -2622,6 +3063,7 @@ object PremiumUiHooks {
                 return true
             }
 
+            recentlyDeletedCustomIds.clear()
             optimisticPlaylistCount = currentCustomCount + 1
             lastPlaylistAddMs = now
             cachedPlaylistCount = optimisticPlaylistCount
@@ -2792,6 +3234,22 @@ object PremiumUiHooks {
     @androidx.compose.runtime.NonRestartableComposable
     @JvmStatic
     fun RenderHomeTopBarCrownAndDailyCheck() {
+        val appearanceTarget = pendingAppearanceTarget
+        if (appearanceTarget != null) {
+            pendingAppearanceTarget = null
+            RenderAppearanceThemeSelector(appearanceTarget)
+            return
+        }
+        val bannerVm = pendingBannerDropdownVm
+        if (bannerVm != null) {
+            val bannerCustom = pendingBannerDropdownCustomList
+            val bannerMenu = pendingBannerDropdownMenuState
+            pendingBannerDropdownVm = null
+            pendingBannerDropdownCustomList = null
+            pendingBannerDropdownMenuState = null
+            RenderPlaylistSwitcherDropdownItems(bannerVm, bannerCustom, bannerMenu)
+            return
+        }
         val dropdownTarget = pendingHomeDropdownTarget
         if (dropdownTarget != null) {
             pendingHomeDropdownTarget = null
@@ -2804,12 +3262,364 @@ object PremiumUiHooks {
         RenderHomeTopBarCrownAndDailyCheckImpl()
     }
 
+    private fun extractAppColor(appColorsObj: Any?, fieldName: String, fallback: Color): Color {
+        if (appColorsObj == null) return fallback
+        return try {
+            val raw = safeGetField(appColorsObj, fieldName) as? Long ?: return fallback
+            Color(raw.toULong())
+        } catch (_: Throwable) {
+            fallback
+        }
+    }
+
+    private fun syncCachedAppColors(isDark: Boolean) {
+        try {
+            val themeKtCls = Class.forName("com.example.ui.theme.ThemeKt")
+            val getterName = if (isDark) "getDarkAppColors" else "getLightAppColors"
+            val colorsObj = themeKtCls.getMethod(getterName).invoke(null) ?: return
+            val bannerCls = Class.forName("com.example.ui.screens.HomeBannerCarouselKt")
+            val cachedField = bannerCls.getDeclaredField("cachedAppColors")
+            cachedField.isAccessible = true
+            cachedField.set(null, colorsObj)
+        } catch (_: Throwable) {
+        }
+    }
+
+    private fun applyThemeModeSelection(
+        context: Context,
+        viewModel: Any?,
+        targetKey: String,
+        systemInDark: Boolean
+    ) {
+        val normalizedKey = when (targetKey.lowercase()) {
+            "light" -> "light"
+            "dark" -> "dark"
+            else -> "system"
+        }
+        try {
+            context.getSharedPreferences("hypnotix_prefs", Context.MODE_PRIVATE)
+                .edit()
+                .putString("app_theme_mode", normalizedKey)
+                .apply()
+        } catch (_: Throwable) {
+        }
+
+        val vm = viewModel ?: discoverViewModelIfNeeded()
+        if (vm != null) {
+            try {
+                val enumCls = Class.forName("com.example.data.model.AppThemeMode")
+                val enumName = when (normalizedKey) {
+                    "light" -> "LIGHT"
+                    "dark" -> "DARK"
+                    else -> "SYSTEM"
+                }
+                val enumConst = enumCls.enumConstants?.firstOrNull {
+                    (it as? Enum<*>)?.name == enumName
+                }
+                if (enumConst != null) {
+                    val setMethod = vm.javaClass.getMethod("setThemeMode", enumCls)
+                    setMethod.invoke(vm, enumConst)
+                }
+            } catch (t: Throwable) {
+                Log.w(TAG, "applyThemeModeSelection failed", t)
+            }
+        }
+
+        val effectiveDark = when (normalizedKey) {
+            "dark" -> true
+            "light" -> false
+            else -> systemInDark
+        }
+        syncCachedAppColors(effectiveDark)
+    }
+
+    @Composable
+    private fun RenderAppearanceThemeSelector(target: Any) {
+        val context = LocalContext.current
+        updateContextAndActivity(context)
+        val viewModel = remember { discoverViewModelIfNeeded() }
+        val systemInDark = isSystemInDarkTheme()
+
+        val initialKey = remember {
+            try {
+                context.getSharedPreferences("hypnotix_prefs", Context.MODE_PRIVATE)
+                    .getString("app_theme_mode", "system")?.lowercase() ?: "system"
+            } catch (_: Throwable) {
+                "system"
+            }
+        }
+        var localSelectedKey by remember { mutableStateOf(initialKey) }
+
+        val themeFlow = remember(viewModel) {
+            safeCall(viewModel, "getCurrentThemeMode") as? StateFlow<*>
+        }
+        val vmThemeState = themeFlow?.collectAsState()
+        val vmKey = vmThemeState?.value?.let { modeObj ->
+            (safeCall(modeObj, "getKey") as? String)?.lowercase()
+                ?: modeObj.toString().lowercase()
+        }
+        val selectedKey = when (vmKey ?: localSelectedKey) {
+            "light" -> "light"
+            "dark" -> "dark"
+            else -> "system"
+        }
+
+        val appColorsObj = safeGetField(target, "\$appColors")
+        val fallbackIsDark = (safeGetField(target, "\$isDark") as? Boolean) ?: false
+        val isEffectiveDark = when (selectedKey) {
+            "dark" -> true
+            "light" -> false
+            else -> systemInDark
+        }
+        val isDarkUi = (safeGetField(appColorsObj, "isDark") as? Boolean)
+            ?: (if (appColorsObj == null) fallbackIsDark else isEffectiveDark)
+
+        val textPrimary = extractAppColor(
+            appColorsObj,
+            "textPrimary",
+            if (isDarkUi) Color.White else Color(0xFF111827)
+        )
+        val textSecondary = extractAppColor(
+            appColorsObj,
+            "textSecondary",
+            if (isDarkUi) Color(0xFFA1A1AA) else Color(0xFF52525B)
+        )
+        val accentRed = Color(0xFFE50914)
+        val selectedBg = if (isDarkUi) Color(0x2AE50914) else Color(0x14E50914)
+        val unselectedBg = if (isDarkUi) Color(0xFF161618) else Color(0xFFF3F4F6)
+        val unselectedBorder = if (isDarkUi) Color(0xFF2A2A2E) else Color(0xFFE5E7EB)
+
+        val headerIcon = when (selectedKey) {
+            "light" -> Icons.Filled.LightMode
+            "dark" -> Icons.Filled.DarkMode
+            else -> Icons.Filled.BrightnessAuto
+        }
+        val activeBadgeLabel = when (selectedKey) {
+            "light" -> "Light"
+            "dark" -> "Dark"
+            else -> "Auto"
+        }
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(38.dp)
+                        .clip(CircleShape)
+                        .background(accentRed.copy(alpha = 0.14f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = headerIcon,
+                        contentDescription = "Theme Mode",
+                        tint = accentRed,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.width(12.dp))
+
+                Text(
+                    text = "Theme Mode",
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = textPrimary,
+                    modifier = Modifier.weight(1f)
+                )
+
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(selectedBg)
+                        .border(1.dp, accentRed.copy(alpha = 0.45f), RoundedCornerShape(50))
+                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                ) {
+                    Text(
+                        text = activeBadgeLabel,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = accentRed
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                ThemeModeOptionTile(
+                    label = "System Default",
+                    icon = Icons.Filled.BrightnessAuto,
+                    isSelected = selectedKey == "system",
+                    accentRed = accentRed,
+                    selectedBg = selectedBg,
+                    unselectedBg = unselectedBg,
+                    unselectedBorder = unselectedBorder,
+                    textPrimary = textPrimary,
+                    textSecondary = textSecondary,
+                    testTag = "theme_option_system",
+                    modifier = Modifier.weight(1f),
+                    onClick = {
+                        localSelectedKey = "system"
+                        applyThemeModeSelection(context, viewModel, "system", systemInDark)
+                    }
+                )
+
+                ThemeModeOptionTile(
+                    label = "Light",
+                    icon = Icons.Filled.LightMode,
+                    isSelected = selectedKey == "light",
+                    accentRed = accentRed,
+                    selectedBg = selectedBg,
+                    unselectedBg = unselectedBg,
+                    unselectedBorder = unselectedBorder,
+                    textPrimary = textPrimary,
+                    textSecondary = textSecondary,
+                    testTag = "theme_option_light",
+                    modifier = Modifier.weight(1f),
+                    onClick = {
+                        localSelectedKey = "light"
+                        applyThemeModeSelection(context, viewModel, "light", systemInDark)
+                    }
+                )
+
+                ThemeModeOptionTile(
+                    label = "Dark",
+                    icon = Icons.Filled.DarkMode,
+                    isSelected = selectedKey == "dark",
+                    accentRed = accentRed,
+                    selectedBg = selectedBg,
+                    unselectedBg = unselectedBg,
+                    unselectedBorder = unselectedBorder,
+                    textPrimary = textPrimary,
+                    textSecondary = textSecondary,
+                    testTag = "theme_option_dark",
+                    modifier = Modifier.weight(1f),
+                    onClick = {
+                        localSelectedKey = "dark"
+                        applyThemeModeSelection(context, viewModel, "dark", systemInDark)
+                    }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            val statusDescription = when (selectedKey) {
+                "light" -> "Clean White theme active: crisp bright styling."
+                "dark" -> "OLED True Black theme active: rich dark styling."
+                else -> "Following device theme (Currently ${if (systemInDark) "Dark" else "Light"})."
+            }
+            Text(
+                text = statusDescription,
+                fontSize = 12.sp,
+                lineHeight = 16.sp,
+                color = textSecondary
+            )
+        }
+    }
+
+    @Composable
+    private fun ThemeModeOptionTile(
+        label: String,
+        icon: ImageVector,
+        isSelected: Boolean,
+        accentRed: Color,
+        selectedBg: Color,
+        unselectedBg: Color,
+        unselectedBorder: Color,
+        textPrimary: Color,
+        textSecondary: Color,
+        testTag: String,
+        modifier: Modifier = Modifier,
+        onClick: () -> Unit
+    ) {
+        val shape = RoundedCornerShape(14.dp)
+        Column(
+            modifier = modifier
+                .heightIn(min = 84.dp)
+                .clip(shape)
+                .background(if (isSelected) selectedBg else unselectedBg)
+                .border(
+                    width = if (isSelected) 1.5.dp else 1.dp,
+                    color = if (isSelected) accentRed else unselectedBorder,
+                    shape = shape
+                )
+                .clickable(onClick = onClick)
+                .testTag(testTag)
+                .padding(horizontal = 6.dp, vertical = 12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = label,
+                tint = if (isSelected) accentRed else textSecondary,
+                modifier = Modifier.size(22.dp)
+            )
+            Spacer(modifier = Modifier.height(7.dp))
+            Text(
+                text = label,
+                fontSize = 12.sp,
+                lineHeight = 15.sp,
+                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                color = if (isSelected) accentRed else textPrimary,
+                textAlign = TextAlign.Center,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+
     @Suppress("UNCHECKED_CAST")
     @Composable
     private fun RenderHomePlaylistDropdownItems(target: Any) {
         val viewModel = safeGetField(target, "\$viewModel") ?: discoverViewModelIfNeeded()
         val showMenuState = safeGetField(target, "\$showPlaylistMenu\$delegate") as? MutableState<Boolean>
         val customPlaylistsDelegate = safeGetField(target, "\$customPlaylists\$delegate") as? State<*>
+        val initialList = (customPlaylistsDelegate?.value as? List<*>)
+        RenderPlaylistSwitcherDropdownItems(viewModel, initialList, showMenuState)
+    }
+
+    private fun resolveAddedPlaylistIcon(url: String, isDark: Boolean): Pair<ImageVector, Color> {
+        val normalized = url.trim().lowercase(Locale.ROOT)
+        return when {
+            normalized.startsWith("file://") ||
+                normalized.startsWith("content://") ||
+                normalized.startsWith("/") ||
+                (!normalized.startsWith("http://") &&
+                    !normalized.startsWith("https://") &&
+                    !normalized.startsWith("xtream_account://") &&
+                    !normalized.contains("player_api.php")) -> {
+                Icons.Filled.Description to (if (isDark) Color(0xFFFBBF24) else Color(0xFFD97706))
+            }
+            normalized.startsWith("xtream_account://") || normalized.contains("player_api.php") -> {
+                Icons.Filled.Dns to (if (isDark) Color(0xFFA78BFA) else Color(0xFF7C3AED))
+            }
+            else -> {
+                Icons.Filled.Link to (if (isDark) Color(0xFF60A5FA) else Color(0xFF2563EB))
+            }
+        }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    @Composable
+    private fun RenderPlaylistSwitcherDropdownItems(
+        rawViewModel: Any?,
+        initialCustomList: List<*>?,
+        showMenuState: MutableState<Boolean>?
+    ) {
+        val context = LocalContext.current
+        val viewModel = rawViewModel ?: discoverViewModelIfNeeded()
+        val isDark = isAppInDarkMode(context, viewModel)
 
         val deletedFlow = safeCall(viewModel, "getDeletedPresetIds") as? StateFlow<Set<String>>
         val deletedSetState = deletedFlow?.collectAsState()
@@ -2818,8 +3628,13 @@ object PremiumUiHooks {
         val customFlow = safeCall(viewModel, "getCustomPlaylists") as? StateFlow<List<Any>>
         val customFlowState = customFlow?.collectAsState()
         val customList: List<Any> = customFlowState?.value
-            ?: (customPlaylistsDelegate?.value as? List<*>)?.filterNotNull()
+            ?: initialCustomList?.filterNotNull()
             ?: latestCustomEntities
+
+        val uiStateFlow = safeCall(viewModel, "getUiState") as? StateFlow<*>
+        val uiStateVal = uiStateFlow?.collectAsState()?.value
+        val selectedPlaylistObj = safeCall(uiStateVal, "getSelectedPlaylist")
+        val selectedPlaylistId = safeCall(selectedPlaylistObj, "getId") as? String ?: ""
 
         val indiaAvailable = !deletedSet.contains("preset_india")
         val globalAvailable = !deletedSet.contains("preset_global")
@@ -2828,6 +3643,13 @@ object PremiumUiHooks {
         val allSource = getPresetSourceByName("getALL")
         val globalSource = getPresetSourceByName("getGLOBAL")
         val indiaSource = getPresetSourceByName("getINDIA")
+
+        val allId = safeCall(allSource, "getId") as? String ?: "preset_all"
+        val globalId = safeCall(globalSource, "getId") as? String ?: "preset_global"
+        val indiaId = safeCall(indiaSource, "getId") as? String ?: "preset_india"
+
+        val textPrimary = if (isDark) Color(0xFFF1F5F9) else Color(0xFF0F172A)
+        val accentRed = if (isDark) Color(0xFFF87171) else Color(0xFFDC2626)
 
         fun selectPlaylistOnVm(source: Any?) {
             showMenuState?.value = false
@@ -2844,24 +3666,82 @@ object PremiumUiHooks {
             }
         }
 
-        if (anyAvailable && allSource != null) {
+        @Composable
+        fun PlaylistMenuRow(
+            title: String,
+            icon: ImageVector,
+            iconTint: Color,
+            isSelected: Boolean,
+            tag: String,
+            onClick: () -> Unit
+        ) {
+            val activeTint = if (isSelected) accentRed else iconTint
+            val labelColor = if (isSelected) accentRed else textPrimary
             DropdownMenuItem(
-                text = { Text(text = "🌐 All Playlists") },
-                onClick = { selectPlaylistOnVm(allSource) }
+                modifier = Modifier.testTag(tag),
+                leadingIcon = {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = title,
+                        tint = activeTint,
+                        modifier = Modifier.size(20.dp)
+                    )
+                },
+                trailingIcon = if (isSelected) {
+                    {
+                        Icon(
+                            imageVector = Icons.Filled.Check,
+                            contentDescription = "Selected",
+                            tint = accentRed,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                } else {
+                    null
+                },
+                text = {
+                    Text(
+                        text = title,
+                        color = labelColor,
+                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                },
+                onClick = onClick
             )
         }
 
         if (globalAvailable && globalSource != null) {
-            DropdownMenuItem(
-                text = { Text(text = "🌍 Global Channels") },
+            PlaylistMenuRow(
+                title = "Global Channels",
+                icon = Icons.Filled.Public,
+                iconTint = if (isDark) Color(0xFF38BDF8) else Color(0xFF0284C7),
+                isSelected = selectedPlaylistId == globalId,
+                tag = "home_dropdown_global",
                 onClick = { selectPlaylistOnVm(globalSource) }
             )
         }
 
         if (indiaAvailable && indiaSource != null) {
-            DropdownMenuItem(
-                text = { Text(text = "🇮🇳 India Channels") },
+            PlaylistMenuRow(
+                title = "India Channels",
+                icon = Icons.Filled.LiveTv,
+                iconTint = if (isDark) Color(0xFF34D399) else Color(0xFF059669),
+                isSelected = selectedPlaylistId == indiaId,
+                tag = "home_dropdown_india",
                 onClick = { selectPlaylistOnVm(indiaSource) }
+            )
+        }
+
+        if (anyAvailable && allSource != null) {
+            PlaylistMenuRow(
+                title = "All Channels",
+                icon = Icons.Filled.PlaylistPlay,
+                iconTint = if (isDark) Color(0xFF818CF8) else Color(0xFF4F46E5),
+                isSelected = selectedPlaylistId == allId,
+                tag = "home_dropdown_all",
+                onClick = { selectPlaylistOnVm(allSource) }
             )
         }
 
@@ -2869,27 +3749,31 @@ object PremiumUiHooks {
             val id = (safeCall(entity, "getId") as? Number)?.toLong() ?: continue
             val title = (safeCall(entity, "getTitle") as? String)?.trim()?.ifEmpty { "My Playlist" } ?: "My Playlist"
             val url = (safeCall(entity, "getUrl") as? String)?.trim() ?: ""
-            DropdownMenuItem(
-                text = { Text(text = "📺 $title") },
+            val customId = "custom_$id"
+            val (itemIcon, itemTint) = resolveAddedPlaylistIcon(url, isDark)
+            PlaylistMenuRow(
+                title = title,
+                icon = itemIcon,
+                iconTint = itemTint,
+                isSelected = selectedPlaylistId == customId,
+                tag = "home_dropdown_custom_$id",
                 onClick = {
-                    val src = createPlaylistSource("custom_$id", title, url, false)
+                    val src = createPlaylistSource(customId, title, url, false)
                     selectPlaylistOnVm(src)
                 }
             )
         }
 
         if (!anyAvailable) {
-            DropdownMenuItem(
-                text = { Text(text = "➕ Add Playlist") },
+            PlaylistMenuRow(
+                title = "Add Playlist",
+                icon = Icons.Filled.PlaylistAdd,
+                iconTint = accentRed,
+                isSelected = false,
+                tag = "home_dropdown_add",
                 onClick = {
                     showMenuState?.value = false
-                    if (viewModel != null) {
-                        try {
-                            val openMethod = viewModel.javaClass.getMethod("openAddPlaylist", Int::class.javaPrimitiveType)
-                            openMethod.invoke(viewModel, 0)
-                        } catch (_: Throwable) {
-                        }
-                    }
+                    openAddPlaylistUi(viewModel)
                 }
             )
         }
@@ -2917,6 +3801,7 @@ object PremiumUiHooks {
             NotificationSyncBridge.ensureInitialized(context)
             NotificationSyncBridge.pollLocalTrayAndPrefs(context)
             PremiumManager.init(context)
+            syncCachedAppColors(isAppInDarkMode(context, discoverViewModelIfNeeded()))
             checkRemoteMinimumVersion(context)
             delay(3500L)
             if (!isForceUpdateRequired && PremiumManager.shouldShowDailyPrompt(context)) {
