@@ -497,7 +497,8 @@ fun SubscriptionContent(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 24.dp, vertical = 6.dp)
+                    .padding(horizontal = 24.dp, vertical = 6.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 Text(
                     text = "• Payment will be charged to your Google account.",
@@ -507,6 +508,18 @@ fun SubscriptionContent(
                 )
                 Text(
                     text = "• Subscription renews automatically unless auto-renew is turned off.",
+                    color = Color(0xFF70778A),
+                    fontSize = 11.sp,
+                    lineHeight = 15.sp
+                )
+                Text(
+                    text = "• You can manage or cancel your subscription anytime in Google Play Store → Payments & subscriptions.",
+                    color = Color(0xFF70778A),
+                    fontSize = 11.sp,
+                    lineHeight = 15.sp
+                )
+                Text(
+                    text = "• Lifetime plan is a one-time purchase with no auto-renewal. Purchases can be restored anytime on the same Google account.",
                     color = Color(0xFF70778A),
                     fontSize = 11.sp,
                     lineHeight = 15.sp

@@ -150,6 +150,12 @@ object SplitPortraitHooks {
         val textMuted: Color
     )
 
+    private fun bindCastLocalPlayer(playerManager: Any?) {
+        if (playerManager != null) {
+            HybridCastManager.bindLocalPlayerManager(playerManager)
+        }
+    }
+
     private fun extractThemePalette(appColors: Any?, context: Context): ThemePalette {
         val isDark = (invokeNoArg(appColors, "isDark") as? Boolean)
             ?: ((context.resources.configuration.uiMode and
@@ -217,6 +223,8 @@ object SplitPortraitHooks {
         )
         val currentPlaylist = getField(lastSplitRootTarget, "\$currentPlaylist")
         val playlistUrl = (invokeNoArg(currentPlaylist, "getUrl") as? String)?.trim()?.takeIf { it.isNotEmpty() }
+        val playerManager = getField(target, "\$playerManager") ?: getField(lastSplitRootTarget, "\$playerManager")
+        bindCastLocalPlayer(playerManager)
 
         ActionPanelContent(
             channelRef = activeChannel,
@@ -637,6 +645,7 @@ object SplitPortraitHooks {
         val isLoading = (getField(target, "\$isLoading") as? Boolean) ?: false
         val activeChannel = getField(target, "\$activeChannel")
         val playerManager = getField(target, "\$playerManager")
+        bindCastLocalPlayer(playerManager)
 
         SearchPlaylistReloadContent(
             searchQueryState = searchState,
@@ -870,56 +879,68 @@ object SplitPortraitHooks {
                         onDismissRequest = { showPlaylistMenu = false },
                         containerColor = palette.surface
                     ) {
-                        val allSource = getPresetSource("getALL")
-                        val indiaSource = getPresetSource("getINDIA")
-                        val globalSource = getPresetSource("getGLOBAL")
+                        if (!isXtreamMode) {
+                            val allSource = getPresetSource("getALL")
+                            val indiaSource = getPresetSource("getINDIA")
+                            val globalSource = getPresetSource("getGLOBAL")
 
-                        if (!noPlaylistsAvailable && allSource != null) {
-                            val isSelected = currentPlaylistId == "preset_all"
-                            PlaylistDropdownOption(
-                                label = "🌐  All Playlists",
-                                isSelected = isSelected,
-                                palette = palette,
-                                onClick = {
-                                    showPlaylistMenu = false
-                                    onSelectPlaylist?.invoke(allSource)
-                                }
-                            )
+                            if (!noPlaylistsAvailable && allSource != null) {
+                                val isSelected = currentPlaylistId == "preset_all"
+                                PlaylistDropdownOption(
+                                    label = "🌐  All Playlists",
+                                    isSelected = isSelected,
+                                    palette = palette,
+                                    onClick = {
+                                        showPlaylistMenu = false
+                                        onSelectPlaylist?.invoke(allSource)
+                                    }
+                                )
+                            }
+
+                            if (indiaSource != null && indiaAvailable) {
+                                val isSelected = currentPlaylistId == "preset_india"
+                                PlaylistDropdownOption(
+                                    label = "🇮🇳  India Channels",
+                                    isSelected = isSelected,
+                                    palette = palette,
+                                    onClick = {
+                                        showPlaylistMenu = false
+                                        onSelectPlaylist?.invoke(indiaSource)
+                                    }
+                                )
+                            }
+
+                            if (globalSource != null && globalAvailable) {
+                                val isSelected = currentPlaylistId == "preset_global"
+                                PlaylistDropdownOption(
+                                    label = "🌍  Global Channels",
+                                    isSelected = isSelected,
+                                    palette = palette,
+                                    onClick = {
+                                        showPlaylistMenu = false
+                                        onSelectPlaylist?.invoke(globalSource)
+                                    }
+                                )
+                            }
                         }
 
-                        if (indiaSource != null && indiaAvailable) {
-                            val isSelected = currentPlaylistId == "preset_india"
-                            PlaylistDropdownOption(
-                                label = "🇮🇳  India Channels",
-                                isSelected = isSelected,
-                                palette = palette,
-                                onClick = {
-                                    showPlaylistMenu = false
-                                    onSelectPlaylist?.invoke(indiaSource)
-                                }
-                            )
+                        val dropdownEntities = customPlaylists.filter { entity ->
+                            val url = (invokeNoArg(entity, "getUrl") as? String)?.trim() ?: ""
+                            if (isXtreamMode) {
+                                url.startsWith("xtream_account://")
+                            } else {
+                                !url.startsWith("xtream_account://")
+                            }
                         }
 
-                        if (globalSource != null && globalAvailable) {
-                            val isSelected = currentPlaylistId == "preset_global"
-                            PlaylistDropdownOption(
-                                label = "🌍  Global Channels",
-                                isSelected = isSelected,
-                                palette = palette,
-                                onClick = {
-                                    showPlaylistMenu = false
-                                    onSelectPlaylist?.invoke(globalSource)
-                                }
-                            )
-                        }
-
-                        for (entity in customPlaylists) {
+                        for (entity in dropdownEntities) {
                             val id = (invokeNoArg(entity, "getId") as? Number)?.toLong() ?: continue
                             val title = (invokeNoArg(entity, "getTitle") as? String)?.takeIf { it.isNotBlank() } ?: "Playlist"
                             val url = (invokeNoArg(entity, "getUrl") as? String)?.trim() ?: ""
                             val sourceId = "custom_$id"
                             val isSelected = (currentPlaylistId == sourceId) ||
-                                (url.isNotEmpty() && currentPlaylistUrl == url)
+                                (url.isNotEmpty() && currentPlaylistUrl == url) ||
+                                (isXtreamMode && !xtreamAccountName.isNullOrBlank() && title.equals(xtreamAccountName, ignoreCase = true))
                             val prefix = when {
                                 url.startsWith("file://") -> "📁"
                                 url.startsWith("xtream_account://") -> "⚡"
@@ -939,7 +960,7 @@ object SplitPortraitHooks {
                             )
                         }
 
-                        if (noPlaylistsAvailable) {
+                        if (!isXtreamMode && noPlaylistsAvailable) {
                             PlaylistDropdownOption(
                                 label = "➕  Add Playlist",
                                 isSelected = false,

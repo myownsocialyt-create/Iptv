@@ -3158,6 +3158,21 @@ object PremiumUiHooks {
                 HomeChannelCardHook.setPendingMiniHighlightTarget(viewModel)
                 return false
             }
+            if (presetId == "\$this\$item" && clsName.endsWith("XtreamContentScreen\$1\$1\$1")) {
+                XtreamHeaderHook.setPendingHeaderTarget(viewModel)
+                return false
+            }
+            if (presetId == "\$this\$item" && clsName.endsWith("WhosWatchingScreen\$1\$2\$2\$1\$3")) {
+                XtreamDemoHook.captureAddProfileCallback(viewModel)
+                return false
+            }
+            if (presetId == "\$this\$Card" && clsName.endsWith("WhosWatchingScreen\$1\$3")) {
+                XtreamDemoHook.setPendingBottomCardTarget(viewModel)
+                return false
+            }
+            if (presetId == "Sample demo credentials filled!") {
+                return XtreamDemoHook.isDemoAccountConnectedNow()
+            }
             if (presetId == "split_refresh_playlist_button" &&
                 (clsName.endsWith("HypnotixSplitScreen\$7\$2\$2") || clsName.endsWith("HypnotixSplitScreen\$7\$3\$2\$1\$2"))
             ) {
@@ -3605,6 +3620,12 @@ object PremiumUiHooks {
 
     @JvmStatic
     fun shouldBlockPlayChannel(viewModel: Any, channel: Any): Boolean {
+        // Hook: Called from NavigationSidebarKt.sendFeedback with (Context, "mailto:techeditz8@gmail.com")
+        if (viewModel is Context && channel == "mailto:techeditz8@gmail.com") {
+            com.example.ui.support.HelpSupportActivity.launch(viewModel)
+            return true
+        }
+
         // Hook F: Called from MainActivity PiP & lifecycle checks with (MainActivity, MainActivity)
         if (viewModel is Activity && channel === viewModel) {
             return isStreamActiveOrBuffering(viewModel)
@@ -3699,6 +3720,10 @@ object PremiumUiHooks {
             }
 
             if (isXtream) {
+                val activeXtream = (safeCall(viewModel, "getActiveXtreamAccount") as? StateFlow<*>)?.value
+                if (XtreamDemoHook.isDemoChannel(channel, activeXtream)) {
+                    return false
+                }
                 launchPaywall(ctx)
                 return true
             }
@@ -3927,6 +3952,12 @@ object PremiumUiHooks {
     @JvmStatic
     fun RenderHomeTopBarCrownAndDailyCheck() {
         if (HomeChannelCardHook.tryRenderPendingHomeCard()) {
+            return
+        }
+        if (XtreamHeaderHook.tryRenderPendingXtreamHeader()) {
+            return
+        }
+        if (XtreamDemoHook.tryRenderPendingBottomCard()) {
             return
         }
         val appearanceTarget = pendingAppearanceTarget
@@ -4498,14 +4529,18 @@ object PremiumUiHooks {
             PremiumManager.init(context)
             syncCachedAppColors(isAppInDarkMode(context, discoverViewModelIfNeeded()))
             checkRemoteMinimumVersion(context)
-            delay(3500L)
-            if (!isForceUpdateRequired && PremiumManager.shouldShowDailyPrompt(context)) {
-                PremiumManager.markDailyPromptShown(context)
-                SubscriptionActivity.start(context)
-            }
             while (true) {
                 delay(2000L)
                 NotificationSyncBridge.pollLocalTrayAndPrefs(context)
+            }
+        }
+
+        // Delay the daily Upgrade Premium screen so it never interrupts immediate app startup
+        LaunchedEffect(Unit) {
+            delay(20_000L)
+            if (!isForceUpdateRequired && PremiumManager.shouldShowDailyPrompt(context)) {
+                PremiumManager.markDailyPromptShown(context)
+                SubscriptionActivity.start(context)
             }
         }
 
@@ -4528,30 +4563,71 @@ object PremiumUiHooks {
         updateContextAndActivity(context)
         val isPremium by PremiumManager.isPremiumState
         val activePlan by PremiumManager.activePlanState
+        val isDark = isAppInDarkMode(context, discoverViewModelIfNeeded())
 
-        val goldBrush = Brush.horizontalGradient(
-            colors = listOf(
-                Color(0xFFFFD700),
-                Color(0xFFF59E0B),
-                Color(0xFFFFE066)
+        val bgBrush = if (isDark) {
+            Brush.horizontalGradient(
+                colors = listOf(
+                    Color(0xFF231B0A),
+                    Color(0xFF17130A),
+                    Color(0xFF261C0A)
+                )
             )
-        )
+        } else {
+            Brush.horizontalGradient(
+                colors = listOf(
+                    Color(0xFFFFFBEB),
+                    Color(0xFFFEF3C7)
+                )
+            )
+        }
+
+        val borderBrush = if (isDark) {
+            Brush.horizontalGradient(
+                colors = listOf(
+                    Color(0xFFFACC15),
+                    Color(0xFFF59E0B),
+                    Color(0xFFFDE047)
+                )
+            )
+        } else {
+            Brush.horizontalGradient(
+                colors = listOf(
+                    Color(0xFFF59E0B),
+                    Color(0xFFD97706)
+                )
+            )
+        }
+
+        val ctaBrush = if (isDark) {
+            Brush.horizontalGradient(
+                colors = listOf(
+                    Color(0xFFFFD700),
+                    Color(0xFFF59E0B)
+                )
+            )
+        } else {
+            Brush.horizontalGradient(
+                colors = listOf(
+                    Color(0xFFF59E0B),
+                    Color(0xFFD97706)
+                )
+            )
+        }
+
+        val titleColor = if (isDark) Color(0xFFFDE047) else Color(0xFF78350F)
+        val subtitleColor = if (isDark) Color(0xFFD4AF37) else Color(0xFFB45309)
+        val iconCircleBg = if (isDark) Color(0x28FFD700) else Color(0x33F59E0B)
+        val iconCircleBorder = if (isDark) Color(0x99FACC15) else Color(0x88D97706)
+        val ctaTextColor = if (isDark) Color(0xFF141004) else Color.White
 
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 6.dp)
-                .clip(RoundedCornerShape(16.dp))
-                .background(
-                    Brush.horizontalGradient(
-                        colors = listOf(
-                            Color(0xFF281F0A),
-                            Color(0xFF1A1405),
-                            Color(0xFF2C2109)
-                        )
-                    )
-                )
-                .border(1.2.dp, goldBrush, RoundedCornerShape(16.dp))
+                .padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 6.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(bgBrush)
+                .border(1.dp, borderBrush, RoundedCornerShape(12.dp))
                 .clickable {
                     if (!isPremium || activePlan != PremiumManager.PLAN_LIFETIME) {
                         SubscriptionActivity.start(context)
@@ -4559,7 +4635,8 @@ object PremiumUiHooks {
                         Toast.makeText(context, "👑 Lifetime Premium Active!", Toast.LENGTH_SHORT).show()
                     }
                 }
-                .padding(horizontal = 14.dp, vertical = 12.dp)
+                .padding(horizontal = 10.dp, vertical = 7.dp)
+                .testTag("drawer_go_pro_banner")
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -4567,50 +4644,58 @@ object PremiumUiHooks {
             ) {
                 Box(
                     modifier = Modifier
-                        .size(38.dp)
-                        .background(Color(0x33FFD700), CircleShape)
-                        .border(1.dp, Color(0xFFFFD700), CircleShape),
+                        .size(28.dp)
+                        .background(iconCircleBg, CircleShape)
+                        .border(0.8.dp, iconCircleBorder, CircleShape),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
                         text = "👑",
-                        fontSize = 18.sp
+                        fontSize = 13.sp
                     )
                 }
 
-                Spacer(modifier = Modifier.width(12.dp))
+                Spacer(modifier = Modifier.width(9.dp))
 
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = if (isPremium) "Premium Member" else "Go Pro / Premium",
-                        fontSize = 14.5.sp,
+                        color = titleColor,
+                        fontSize = 13.sp,
+                        lineHeight = 15.sp,
                         fontWeight = FontWeight.ExtraBold,
-                        style = androidx.compose.ui.text.TextStyle(brush = goldBrush)
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
-                    Spacer(modifier = Modifier.height(2.dp))
                     Text(
                         text = if (isPremium && activePlan != PremiumManager.PLAN_LIFETIME)
                             "Tap to upgrade your plan"
                         else if (isPremium)
                             "All VIP features unlocked"
                         else
-                            "No Ads • PiP • Xtream • Unlimited",
-                        color = Color(0xFFD4AF37),
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Medium
+                            "No Ads • PiP • Xtream",
+                        color = subtitleColor,
+                        fontSize = 10.sp,
+                        lineHeight = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
 
+                Spacer(modifier = Modifier.width(8.dp))
+
                 Box(
                     modifier = Modifier
-                        .background(goldBrush, RoundedCornerShape(10.dp))
-                        .padding(horizontal = 10.dp, vertical = 5.dp)
+                        .background(ctaBrush, RoundedCornerShape(8.dp))
+                        .padding(horizontal = 9.dp, vertical = 4.dp)
                 ) {
                     Text(
                         text = if (isPremium) "PRO" else "BUY",
-                        color = Color(0xFF141004),
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Black
+                        color = ctaTextColor,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Black,
+                        maxLines = 1
                     )
                 }
             }

@@ -111,10 +111,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.media3.common.Player
+import androidx.media3.exoplayer.ExoPlayer
 import java.io.BufferedOutputStream
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.io.OutputStreamWriter
+import java.lang.ref.WeakReference
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.HttpURLConnection
@@ -128,6 +131,7 @@ import java.net.URI
 import java.net.URL
 import java.net.URLDecoder
 import java.net.URLEncoder
+import java.security.SecureRandom
 import java.util.Collections
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
@@ -136,15 +140,17 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
 object HybridCastManager {
     private const val TAG = "HybridCastManager"
-    private val mainHandler = Handler(Looper.getMainLooper())
+    private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
     private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val serverExecutor = Executors.newCachedThreadPool()
 
@@ -229,9 +235,253 @@ object HybridCastManager {
     private val webServerSocketRef = java.util.concurrent.atomic.AtomicReference<ServerSocket?>(null)
     private val webClientLastSeen = ConcurrentHashMap<String, Long>()
     private val seenDeviceLocations = ConcurrentHashMap<String, CastDevice>()
+    private val allowedProxyHosts = ConcurrentHashMap.newKeySet<String>()
+    private val tokenRandom = SecureRandom()
+
+    @Volatile
+    private var webAuthToken: String = ""
+
+    @Volatile
+    private var webServerBaseUrl: String = ""
+
+    @Volatile
+    private var localPlayerManagerRef: WeakReference<Any>? = null
+
+    @Volatile
+    private var guardedExoPlayerRef: WeakReference<ExoPlayer>? = null
+
+    @Volatile
+    private var pausedLocalPlayerForCast: Boolean = false
+
+    @Volatile
+    private var webClientPruneJob: Job? = null
+
+    private val localPlayerCastGuardListener = object : Player.Listener {
+        override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+            if (playWhenReady && isRemotePlaybackActive()) {
+                pauseLocalPlayerForCast()
+            }
+        }
+
+        override fun onIsPlayingChanged(isPlaying: Boolean) {
+            if (isPlaying && isRemotePlaybackActive()) {
+                pauseLocalPlayerForCast()
+            }
+        }
+    }
 
     val isCastingActive: Boolean
         get() = activeMode != ActiveCastMode.NONE || isWebServerRunning
+
+    // =========================================================================
+    // Focused Cast Helpers (URL sanitization, masking, token, proxy, player sync)
+    // =========================================================================
+
+    internal fun stripPipeSuffix(url: String): String =
+        url.trim().substringBefore('|').trim()
+
+    internal fun maskXtreamCredentials(url: String): String {
+        if (url.isBlank()) return url
+        return XTREAM_CREDENTIAL_REGEX.replace(url, "$1***/***$4")
+    }
+
+    internal fun generateWebAuthToken(): String {
+        val sb = StringBuilder(WEB_TOKEN_LENGTH)
+        repeat(WEB_TOKEN_LENGTH) {
+            sb.append(WEB_TOKEN_CHARS[tokenRandom.nextInt(WEB_TOKEN_CHARS.length)])
+        }
+        return sb.toString()
+    }
+
+    internal fun buildWebServerUrl(lanIp: String, port: Int, token: String): String {
+        val base = "http://$lanIp:$port"
+        return if (token.isNotBlank()) "$base/?t=$token" else base
+    }
+
+    internal fun buildRelativeProxyPath(targetUrl: String, token: String = webAuthToken): String {
+        val encodedUrl = URLEncoder.encode(targetUrl, "UTF-8")
+        return "/proxy?t=${URLEncoder.encode(token, "UTF-8")}&url=$encodedUrl"
+    }
+
+    private fun buildAbsoluteProxyUrl(targetUrl: String): String {
+        val base = webServerBaseUrl.trimEnd('/')
+        if (base.isEmpty()) return targetUrl
+        return "$base${buildRelativeProxyPath(targetUrl, webAuthToken)}"
+    }
+
+    internal fun extractQueryParam(fullPath: String, key: String): String? {
+        val query = fullPath.substringAfter('?', missingDelimiterValue = "")
+        if (query.isEmpty()) return null
+        for (pair in query.split('&')) {
+            val eq = pair.indexOf('=')
+            val paramKey = if (eq >= 0) pair.substring(0, eq) else pair
+            if (paramKey == key) {
+                val rawValue = if (eq >= 0) pair.substring(eq + 1) else ""
+                return runCatching { URLDecoder.decode(rawValue, "UTF-8") }.getOrDefault(rawValue)
+            }
+        }
+        return null
+    }
+
+    internal fun isValidWebRequestToken(fullPath: String, expectedToken: String = webAuthToken): Boolean {
+        if (expectedToken.isBlank()) return false
+        return extractQueryParam(fullPath, "t") == expectedToken
+    }
+
+    internal fun extractNormalizedHttpHost(url: String): String? {
+        val trimmed = url.trim()
+        if (trimmed.isEmpty()) return null
+        return try {
+            val uri = URI(trimmed)
+            val scheme = uri.scheme?.lowercase(Locale.US) ?: return null
+            if (scheme != "http" && scheme != "https") return null
+            uri.host?.lowercase(Locale.US)?.takeIf { it.isNotBlank() }
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    internal fun resetAllowedProxyHosts(streamUrl: String) {
+        allowedProxyHosts.clear()
+        allowProxyHostFromUrl(stripPipeSuffix(streamUrl))
+    }
+
+    internal fun allowProxyHostFromUrl(url: String) {
+        val host = extractNormalizedHttpHost(url) ?: return
+        allowedProxyHosts.add(host)
+    }
+
+    internal fun isAllowedProxyUrl(targetUrl: String): Boolean {
+        val host = extractNormalizedHttpHost(targetUrl) ?: return false
+        return allowedProxyHosts.contains(host)
+    }
+
+    internal fun isRemotePlaybackActive(): Boolean {
+        return activeMode == ActiveCastMode.DLNA_DEVICE ||
+            (isWebServerRunning && connectedWebClientCount > 0)
+    }
+
+    fun bindLocalPlayerManager(playerManager: Any?) {
+        if (playerManager == null) return
+        localPlayerManagerRef = WeakReference(playerManager)
+        attachLocalPlayerCastGuard(playerManager)
+        syncLocalPlayerForCastState()
+    }
+
+    private fun extractLocalExoPlayer(playerManager: Any? = localPlayerManagerRef?.get()): ExoPlayer? {
+        if (playerManager == null) return null
+        return try {
+            val method = playerManager.javaClass.getMethod("getExoPlayer")
+            method.invoke(playerManager) as? ExoPlayer
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    private fun attachLocalPlayerCastGuard(playerManager: Any) {
+        runOnMainThread {
+            val exoPlayer = extractLocalExoPlayer(playerManager) ?: return@runOnMainThread
+            val previous = guardedExoPlayerRef?.get()
+            if (previous === exoPlayer) return@runOnMainThread
+            try {
+                previous?.removeListener(localPlayerCastGuardListener)
+            } catch (_: Throwable) {
+            }
+            try {
+                exoPlayer.addListener(localPlayerCastGuardListener)
+                guardedExoPlayerRef = WeakReference(exoPlayer)
+            } catch (_: Throwable) {
+            }
+        }
+    }
+
+    private fun pauseLocalPlayerForCast() {
+        runOnMainThread {
+            val exoPlayer = extractLocalExoPlayer() ?: return@runOnMainThread
+            pausedLocalPlayerForCast = true
+            try {
+                if (exoPlayer.playWhenReady || exoPlayer.isPlaying) {
+                    exoPlayer.playWhenReady = false
+                    exoPlayer.pause()
+                }
+            } catch (_: Throwable) {
+            }
+        }
+    }
+
+    private fun resumeLocalPlayerAfterCast() {
+        runOnMainThread {
+            if (!pausedLocalPlayerForCast) return@runOnMainThread
+            pausedLocalPlayerForCast = false
+            val exoPlayer = extractLocalExoPlayer() ?: return@runOnMainThread
+            try {
+                exoPlayer.playWhenReady = true
+                exoPlayer.play()
+            } catch (_: Throwable) {
+            }
+        }
+    }
+
+    private fun syncLocalPlayerForCastState() {
+        if (isRemotePlaybackActive()) {
+            pauseLocalPlayerForCast()
+        } else if (pausedLocalPlayerForCast) {
+            resumeLocalPlayerAfterCast()
+        }
+    }
+
+    private fun runOnMainThread(block: () -> Unit) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            block()
+        } else {
+            mainHandler.post(block)
+        }
+    }
+
+    private fun startWebClientPruneLoop() {
+        webClientPruneJob?.cancel()
+        webClientPruneJob = ioScope.launch {
+            while (isActive && isWebServerRunning) {
+                delay(4_000L)
+                pruneStaleWebClients()
+            }
+        }
+    }
+
+    private fun pruneStaleWebClients() {
+        val now = System.currentTimeMillis()
+        webClientLastSeen.entries.removeIf { now - it.value > WEB_CLIENT_TIMEOUT_MS }
+        val activeCount = webClientLastSeen.size
+        if (connectedWebClientCount != activeCount) {
+            runOnMainThread {
+                connectedWebClientCount = activeCount
+                syncLocalPlayerForCastState()
+            }
+        }
+    }
+
+    private fun sendHttp403(client: Socket, reason: String = "Forbidden") {
+        try {
+            val body = reason.toByteArray(Charsets.UTF_8)
+            val out = BufferedOutputStream(client.getOutputStream())
+            val headers = buildString {
+                append("HTTP/1.1 403 Forbidden\r\n")
+                append("Content-Type: text/plain; charset=utf-8\r\n")
+                append("Content-Length: ${body.size}\r\n")
+                append("Cache-Control: no-store\r\n")
+                append("Connection: close\r\n\r\n")
+            }
+            out.write(headers.toByteArray(Charsets.UTF_8))
+            out.write(body)
+            out.flush()
+        } catch (_: Throwable) {
+        }
+    }
+
+    private val XTREAM_CREDENTIAL_REGEX = Regex("(/(?:live|movie)/)([^/?#]+)/([^/?#]+)(/)", RegexOption.IGNORE_CASE)
+    private const val WEB_TOKEN_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    private const val WEB_TOKEN_LENGTH = 6
+    private const val WEB_CLIENT_TIMEOUT_MS = 12_000L
 
     fun updateCurrentChannel(
         context: Context,
@@ -241,7 +491,7 @@ object HybridCastManager {
         logoUrl: String,
         streamUrl: String
     ) {
-        val cleanedUrl = streamUrl.trim()
+        val cleanedUrl = stripPipeSuffix(streamUrl)
         if (cleanedUrl.isEmpty()) return
 
         val prev = currentChannel
@@ -254,6 +504,10 @@ object HybridCastManager {
             streamUrl = cleanedUrl
         )
 
+        if (changed || allowedProxyHosts.isEmpty()) {
+            resetAllowedProxyHosts(cleanedUrl)
+        }
+
         if (changed) {
             streamRevision++
             isRemotePaused = false
@@ -263,6 +517,9 @@ object HybridCastManager {
                 castToDevice(context, targetDevice, showToast = false)
             } else if (isWebServerRunning) {
                 statusMessage = "Web TV synced: ${currentChannel.name}"
+            }
+            if (isRemotePlaybackActive()) {
+                pauseLocalPlayerForCast()
             }
         }
     }
@@ -603,7 +860,8 @@ object HybridCastManager {
      */
     fun castToDevice(context: Context, device: CastDevice, showToast: Boolean = true) {
         val snap = currentChannel
-        if (snap.streamUrl.isBlank()) {
+        val cleanStreamUrl = stripPipeSuffix(snap.streamUrl)
+        if (cleanStreamUrl.isBlank()) {
             if (showToast) {
                 Toast.makeText(context, "Play a live channel first to cast", Toast.LENGTH_SHORT).show()
             }
@@ -611,12 +869,11 @@ object HybridCastManager {
         }
 
         if (device.protocol == DeviceProtocol.SYSTEM_ROUTE) {
-            activeMode = ActiveCastMode.SYSTEM_MIRROR
-            connectedDevice = device
-            statusMessage = "Opening Wireless Display for ${device.name}..."
             openSystemCastSettings(context)
             return
         }
+
+        resetAllowedProxyHosts(cleanStreamUrl)
 
         val controlUrl = device.avTransportControlUrl
         if (controlUrl == null) {
@@ -640,10 +897,10 @@ object HybridCastManager {
             ensureWebServerRunning(context)
         }
 
-        val effectiveStreamUrl = if (useProxyForDlna && webServerUrl.isNotEmpty()) {
-            "$webServerUrl/proxy?url=${URLEncoder.encode(snap.streamUrl, "UTF-8")}"
+        val effectiveStreamUrl = if (useProxyForDlna && webServerBaseUrl.isNotEmpty()) {
+            buildAbsoluteProxyUrl(cleanStreamUrl)
         } else {
-            snap.streamUrl
+            cleanStreamUrl
         }
 
         statusMessage = "Sending '${snap.name}' to ${device.name}..."
@@ -661,6 +918,7 @@ object HybridCastManager {
                     activeMode = ActiveCastMode.DLNA_DEVICE
                     isRemotePaused = false
                     statusMessage = "Casting '${snap.name}' on ${device.name}"
+                    syncLocalPlayerForCastState()
                     if (showToast) {
                         Toast.makeText(context, "Casting '${snap.name}' to ${device.name}", Toast.LENGTH_SHORT).show()
                     }
@@ -755,6 +1013,7 @@ object HybridCastManager {
             } else {
                 "Cast session stopped"
             }
+            syncLocalPlayerForCastState()
         } else {
             statusMessage = "Sent $command to Cast receiver"
         }
@@ -778,6 +1037,7 @@ object HybridCastManager {
         activeMode = ActiveCastMode.NONE
         isRemotePaused = false
         statusMessage = "Cast disconnected"
+        syncLocalPlayerForCastState()
         Toast.makeText(context, "Disconnected from Cast", Toast.LENGTH_SHORT).show()
     }
 
@@ -890,7 +1150,8 @@ object HybridCastManager {
     fun ensureWebServerRunning(context: Context): String {
         if (isWebServerRunning && webServerSocketRef.get()?.isClosed == false) {
             val ip = detectLocalLanIp(context)
-            webServerUrl = "http://$ip:$webServerPort"
+            webServerBaseUrl = "http://$ip:$webServerPort"
+            webServerUrl = buildWebServerUrl(ip, webServerPort, webAuthToken)
             return webServerUrl
         }
         startWebCastServer(context)
@@ -920,14 +1181,18 @@ object HybridCastManager {
             return
         }
 
+        val token = generateWebAuthToken()
+        webAuthToken = token
         webServerSocketRef.set(boundSocket)
         webServerPort = chosenPort
-        webServerUrl = "http://$lanIp:$chosenPort"
+        webServerBaseUrl = "http://$lanIp:$chosenPort"
+        webServerUrl = buildWebServerUrl(lanIp, chosenPort, token)
         isWebServerRunning = true
         if (activeMode == ActiveCastMode.NONE) {
             activeMode = ActiveCastMode.WEB_TV_SERVER
         }
         statusMessage = "Web TV Ready: Open $webServerUrl on Smart TV Browser"
+        startWebClientPruneLoop()
 
         serverExecutor.execute {
             while (!boundSocket.isClosed) {
@@ -944,6 +1209,8 @@ object HybridCastManager {
     }
 
     fun stopWebCastServer() {
+        webClientPruneJob?.cancel()
+        webClientPruneJob = null
         try {
             webServerSocketRef.getAndSet(null)?.close()
         } catch (_: Throwable) {
@@ -951,9 +1218,13 @@ object HybridCastManager {
         webClientLastSeen.clear()
         connectedWebClientCount = 0
         isWebServerRunning = false
+        webAuthToken = ""
+        webServerBaseUrl = ""
+        webServerUrl = ""
         if (activeMode == ActiveCastMode.WEB_TV_SERVER) {
             activeMode = if (connectedDevice != null) ActiveCastMode.DLNA_DEVICE else ActiveCastMode.NONE
         }
+        syncLocalPlayerForCastState()
     }
 
     private fun handleHttpClient(socket: Socket) {
@@ -972,19 +1243,28 @@ object HybridCastManager {
                     if (line.isNullOrEmpty()) break
                 }
 
+                if (!isValidWebRequestToken(fullPath)) {
+                    sendHttp403(client, "Forbidden: missing or invalid token")
+                    return
+                }
+
+                val pathOnly = fullPath.substringBefore('?')
                 val remoteIp = client.inetAddress?.hostAddress ?: "tv-client"
                 val now = System.currentTimeMillis()
                 webClientLastSeen[remoteIp] = now
                 // Prune clients inactive > 12s
-                webClientLastSeen.entries.removeIf { now - it.value > 12_000L }
+                webClientLastSeen.entries.removeIf { now - it.value > WEB_CLIENT_TIMEOUT_MS }
                 val activeCount = webClientLastSeen.size
                 if (connectedWebClientCount != activeCount) {
-                    mainHandler.post { connectedWebClientCount = activeCount }
+                    runOnMainThread {
+                        connectedWebClientCount = activeCount
+                        syncLocalPlayerForCastState()
+                    }
                 }
 
                 when {
-                    fullPath == "/" || fullPath.startsWith("/index") -> {
-                        val htmlBytes = buildWebTvReceiverHtml().toByteArray(Charsets.UTF_8)
+                    pathOnly == "/" || pathOnly.startsWith("/index") -> {
+                        val htmlBytes = buildWebTvReceiverHtml(webAuthToken).toByteArray(Charsets.UTF_8)
                         val out = BufferedOutputStream(client.getOutputStream())
                         val headers = buildString {
                             append("HTTP/1.1 200 OK\r\n")
@@ -999,10 +1279,11 @@ object HybridCastManager {
                         out.flush()
                     }
 
-                    fullPath.startsWith("/api/state") -> {
+                    pathOnly == "/api/state" -> {
                         val snap = currentChannel
-                        val proxiedPath = if (snap.streamUrl.isNotBlank()) {
-                            "/proxy?url=${URLEncoder.encode(snap.streamUrl, "UTF-8")}"
+                        val cleanStreamUrl = stripPipeSuffix(snap.streamUrl)
+                        val proxiedPath = if (cleanStreamUrl.isNotBlank()) {
+                            buildRelativeProxyPath(cleanStreamUrl, webAuthToken)
                         } else {
                             ""
                         }
@@ -1011,7 +1292,7 @@ object HybridCastManager {
                             put("category", snap.category.ifBlank { "Live TV" })
                             put("language", snap.language)
                             put("logoUrl", snap.logoUrl)
-                            put("directStreamUrl", snap.streamUrl)
+                            put("directStreamUrl", cleanStreamUrl)
                             put("proxiedStreamUrl", proxiedPath)
                             put("preferProxy", useProxyForWebTv)
                             put("revision", streamRevision)
@@ -1035,9 +1316,12 @@ object HybridCastManager {
                         out.flush()
                     }
 
-                    fullPath.startsWith("/proxy?url=") -> {
-                        val encoded = fullPath.substringAfter("/proxy?url=").substringBefore("&")
-                        val targetUrl = URLDecoder.decode(encoded, "UTF-8")
+                    pathOnly == "/proxy" -> {
+                        val targetUrl = extractQueryParam(fullPath, "url").orEmpty()
+                        if (!isAllowedProxyUrl(targetUrl)) {
+                            sendHttp403(client, "Forbidden: proxy host not allowed")
+                            return
+                        }
                         handleStreamProxyRequest(client, targetUrl)
                     }
 
@@ -1058,6 +1342,10 @@ object HybridCastManager {
      * even when the upstream server blocks browser CORS or requires an IPTV User-Agent.
      */
     private fun handleStreamProxyRequest(client: Socket, targetUrl: String) {
+        if (!isAllowedProxyUrl(targetUrl)) {
+            sendHttp403(client, "Forbidden: proxy host not allowed")
+            return
+        }
         var conn: HttpURLConnection? = null
         try {
             var currentUrl = targetUrl
@@ -1076,6 +1364,11 @@ object HybridCastManager {
                     val loc = conn.getHeaderField("Location") ?: break
                     val resolved = URI(currentUrl).resolve(loc).toString()
                     conn.disconnect()
+                    if (extractNormalizedHttpHost(resolved) == null) {
+                        sendHttp403(client, "Forbidden: invalid redirect target")
+                        return
+                    }
+                    allowProxyHostFromUrl(resolved)
                     currentUrl = resolved
                     redirects++
                 } else {
@@ -1103,7 +1396,7 @@ object HybridCastManager {
                                 val updatedTag = Regex("""URI="([^"]+)"""").replace(trimmed) { match ->
                                     val rawUri = match.groupValues[1]
                                     val absUri = runCatching { baseUri.resolve(rawUri).toString() }.getOrDefault(rawUri)
-                                    val proxied = "/proxy?url=${URLEncoder.encode(absUri, "UTF-8")}"
+                                    val proxied = buildRelativeProxyPath(absUri, webAuthToken)
                                     """URI="$proxied""""
                                 }
                                 append(updatedTag).append("\n")
@@ -1112,7 +1405,7 @@ object HybridCastManager {
                             }
                         } else {
                             val absUrl = runCatching { baseUri.resolve(trimmed).toString() }.getOrDefault(trimmed)
-                            val proxiedLine = "/proxy?url=${URLEncoder.encode(absUrl, "UTF-8")}"
+                            val proxiedLine = buildRelativeProxyPath(absUrl, webAuthToken)
                             append(proxiedLine).append("\n")
                         }
                     }
@@ -1158,7 +1451,7 @@ object HybridCastManager {
         }
     }
 
-    private fun buildWebTvReceiverHtml(): String {
+    private fun buildWebTvReceiverHtml(authToken: String): String {
         return """
 <!DOCTYPE html>
 <html lang="en">
@@ -1293,9 +1586,11 @@ object HybridCastManager {
     }
   }
 
+  const AUTH_TOKEN = '$authToken';
+
   async function pollState() {
     try {
-      const res = await fetch('/api/state?t=' + Date.now(), { cache: 'no-store' });
+      const res = await fetch('/api/state?t=' + encodeURIComponent(AUTH_TOKEN) + '&_=' + Date.now(), { cache: 'no-store' });
       if (!res.ok) return;
       const st = await res.json();
       if (latestState === null && typeof st.preferProxy === 'boolean') {
@@ -1343,8 +1638,7 @@ object HybridCastManager {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
                 context.startActivity(intent)
-                activeMode = ActiveCastMode.SYSTEM_MIRROR
-                statusMessage = "System Wireless Display / Cast opened"
+                statusMessage = "System Cast opened"
                 return
             } catch (_: Throwable) {
             }
@@ -1354,12 +1648,13 @@ object HybridCastManager {
 
     fun castViaExternalApp(context: Context, specificPackage: String? = null) {
         val snap = currentChannel
-        if (snap.streamUrl.isBlank()) {
+        val cleanStreamUrl = stripPipeSuffix(snap.streamUrl)
+        if (cleanStreamUrl.isBlank()) {
             Toast.makeText(context, "Select and play a live channel first", Toast.LENGTH_SHORT).show()
             return
         }
 
-        val mime = if (snap.streamUrl.contains(".m3u8", ignoreCase = true)) {
+        val mime = if (cleanStreamUrl.contains(".m3u8", ignoreCase = true)) {
             "application/x-mpegURL"
         } else {
             "video/*"
@@ -1367,7 +1662,7 @@ object HybridCastManager {
 
         try {
             val viewIntent = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(Uri.parse(snap.streamUrl), mime)
+                setDataAndType(Uri.parse(cleanStreamUrl), mime)
                 putExtra("title", snap.name)
                 putExtra(Intent.EXTRA_TITLE, snap.name)
                 putExtra("secure_uri", true)
@@ -1389,7 +1684,7 @@ object HybridCastManager {
             // Fallback with generic video/* MIME
             try {
                 val fallbackIntent = Intent(Intent.ACTION_VIEW).apply {
-                    setDataAndType(Uri.parse(snap.streamUrl), "video/*")
+                    setDataAndType(Uri.parse(cleanStreamUrl), "video/*")
                     putExtra("title", snap.name)
                     putExtra(Intent.EXTRA_TITLE, snap.name)
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -1405,10 +1700,11 @@ object HybridCastManager {
     }
 
     fun copyToClipboard(context: Context, label: String, value: String, toastText: String) {
-        if (value.isBlank()) return
+        val safeValue = maskXtreamCredentials(value)
+        if (safeValue.isBlank()) return
         try {
             val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-            cm?.setPrimaryClip(ClipData.newPlainText(label, value))
+            cm?.setPrimaryClip(ClipData.newPlainText(label, safeValue))
             Toast.makeText(context, toastText, Toast.LENGTH_SHORT).show()
         } catch (_: Throwable) {
         }
@@ -1416,10 +1712,11 @@ object HybridCastManager {
 
     fun shareStreamLink(context: Context) {
         val snap = currentChannel
+        val maskedStreamUrl = maskXtreamCredentials(stripPipeSuffix(snap.streamUrl))
         val linkToShare = if (isWebServerRunning && webServerUrl.isNotBlank()) {
-            "Watch ${snap.name} on Smart TV Browser: $webServerUrl\nDirect Stream: ${snap.streamUrl}"
+            "Watch ${snap.name} on Smart TV Browser: $webServerUrl\nDirect Stream: $maskedStreamUrl"
         } else {
-            "${snap.name} Live Stream:\n${snap.streamUrl}"
+            "${snap.name} Live Stream:\n$maskedStreamUrl"
         }
         try {
             val sendIntent = Intent(Intent.ACTION_SEND).apply {
@@ -1435,18 +1732,60 @@ object HybridCastManager {
         }
     }
 
+    internal data class NetworkIpCandidate(
+        val interfaceName: String,
+        val ipAddress: String
+    )
+
+    internal fun isCellularInterfaceName(interfaceName: String): Boolean {
+        val lower = interfaceName.lowercase(Locale.US)
+        return lower.startsWith("rmnet") ||
+            lower.contains("rmnet") ||
+            lower.startsWith("ccmni") ||
+            lower.startsWith("pdp") ||
+            lower.startsWith("wwan")
+    }
+
+    internal fun isPrivateIpv4(ip: String): Boolean {
+        return ip.startsWith("192.168.") || ip.startsWith("10.") || ip.startsWith("172.")
+    }
+
+    internal fun selectPreferredLanIp(candidates: List<NetworkIpCandidate>): String? {
+        val valid = candidates.filter { candidate ->
+            !isCellularInterfaceName(candidate.interfaceName) && isPrivateIpv4(candidate.ipAddress)
+        }
+        if (valid.isEmpty()) return null
+
+        fun interfacePriority(iface: String): Int {
+            val lower = iface.lowercase(Locale.US)
+            return when {
+                lower == "wlan0" -> 0
+                lower == "ap0" -> 1
+                lower.startsWith("wlan") -> 2
+                lower.startsWith("ap") || lower.startsWith("softap") || lower.startsWith("swlan") -> 3
+                lower.startsWith("eth") -> 4
+                else -> 5
+            }
+        }
+
+        return valid.minByOrNull { interfacePriority(it.interfaceName) }?.ipAddress
+    }
+
     fun detectLocalLanIp(context: Context): String {
+        val candidates = mutableListOf<NetworkIpCandidate>()
+
         try {
-            val cm = context.applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-            val activeNet = cm?.activeNetwork
-            val linkProps = if (activeNet != null) cm.getLinkProperties(activeNet) else null
-            if (linkProps != null) {
-                for (la in linkProps.linkAddresses) {
-                    val addr = la.address
+            val interfaces = Collections.list(NetworkInterface.getNetworkInterfaces())
+            for (nif in interfaces) {
+                if (!nif.isUp || nif.isLoopback) continue
+                val ifaceName = nif.name.orEmpty()
+                if (isCellularInterfaceName(ifaceName)) continue
+                val addrs = Collections.list(nif.inetAddresses)
+                for (addr in addrs) {
                     if (addr is Inet4Address && !addr.isLoopbackAddress) {
-                        val host = addr.hostAddress ?: continue
-                        if (host.startsWith("192.168.") || host.startsWith("10.") || host.startsWith("172.")) {
-                            return host
+                        val ip = addr.hostAddress ?: continue
+                        if (isPrivateIpv4(ip)) {
+                            candidates.add(NetworkIpCandidate(ifaceName, ip))
                         }
                     }
                 }
@@ -1455,22 +1794,25 @@ object HybridCastManager {
         }
 
         try {
-            val interfaces = Collections.list(NetworkInterface.getNetworkInterfaces())
-            for (nif in interfaces) {
-                if (!nif.isUp || nif.isLoopback) continue
-                val addrs = Collections.list(nif.inetAddresses)
-                for (addr in addrs) {
+            val cm = context.applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            val activeNet = cm?.activeNetwork
+            val linkProps = if (activeNet != null) cm.getLinkProperties(activeNet) else null
+            val ifaceName = linkProps?.interfaceName.orEmpty()
+            if (linkProps != null && !isCellularInterfaceName(ifaceName)) {
+                for (la in linkProps.linkAddresses) {
+                    val addr = la.address
                     if (addr is Inet4Address && !addr.isLoopbackAddress) {
-                        val ip = addr.hostAddress ?: continue
-                        if (ip.startsWith("192.168.") || ip.startsWith("10.") || ip.startsWith("172.")) {
-                            return ip
+                        val host = addr.hostAddress ?: continue
+                        if (isPrivateIpv4(host)) {
+                            candidates.add(NetworkIpCandidate(ifaceName, host))
                         }
                     }
                 }
             }
         } catch (_: Throwable) {
         }
-        return "127.0.0.1"
+
+        return selectPreferredLanIp(candidates) ?: "127.0.0.1"
     }
 
     private fun extractXmlTag(xml: String, tag: String): String {
@@ -2596,7 +2938,7 @@ object HybridCastManager {
                                                 copyToClipboard(
                                                     context = context,
                                                     label = "Stream URL",
-                                                    value = currentChannel.streamUrl,
+                                                    value = maskXtreamCredentials(stripPipeSuffix(currentChannel.streamUrl)),
                                                     toastText = "Live stream URL copied!"
                                                 )
                                             },

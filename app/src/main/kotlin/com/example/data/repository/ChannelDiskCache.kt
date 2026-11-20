@@ -411,6 +411,17 @@ object ChannelDiskCache {
             return
         }
 
+        if (com.example.premium.XtreamDemoHook.isDemoXtreamAccount(account)) {
+            if (fetchLive) {
+                liveFlow.value = buildDemoChannels(com.example.premium.XtreamDemoHook.getDemoLiveSpecs())
+            }
+            if (fetchVod) {
+                vodFlow.value = buildDemoChannels(com.example.premium.XtreamDemoHook.getDemoVodSpecs())
+            }
+            loadingFlow.value = false
+            return
+        }
+
         val liveKey = buildXtreamKey("live", account)
         val vodKey = buildXtreamKey("vod", account)
         val scope = resolveViewModelScope(viewModel)
@@ -931,6 +942,27 @@ object ChannelDiskCache {
         } catch (t: Throwable) {
             safeLogWarn("fromChannelRecord failed", t)
             null
+        }
+    }
+
+    private fun buildDemoChannels(specs: List<com.example.premium.XtreamDemoHook.DemoChannelSpec>): List<Any> {
+        return specs.mapNotNull { spec ->
+            fromChannelRecord(
+                ChannelRecord(
+                    id = spec.id,
+                    name = spec.name,
+                    logoUrl = spec.logoUrl,
+                    category = spec.category,
+                    language = spec.language,
+                    country = spec.country,
+                    streamUrl = spec.streamUrl,
+                    isFavorite = false,
+                    playlistName = spec.playlistName,
+                    userAgent = null,
+                    referer = null,
+                    isMovieOrVod = spec.isMovieOrVod
+                )
+            )
         }
     }
 

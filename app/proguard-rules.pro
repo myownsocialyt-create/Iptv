@@ -124,8 +124,12 @@
 -keep class com.example.premium.HybridCastManager { *; }
 -keep class com.example.premium.NotificationSyncBridge { *; }
 -keep class com.example.premium.PlayStoreUpdatePrompt { *; }
+-keep class com.example.premium.XtreamHeaderHook { *; }
+-keep class com.example.premium.XtreamDemoHook { *; }
+-keep class com.example.player.StreamOfflineOverlayHook { *; }
 -keep class androidx.compose.foundation.lazy.LazyDslKx { *; }
 -keep class androidx.compose.foundation.lazy.grid.LazyGridDslKx { *; }
 -keep class com.example.ui.scroll.** { *; }
+-keep class com.example.ui.support.** { *; }
 
 -dontwarn **
