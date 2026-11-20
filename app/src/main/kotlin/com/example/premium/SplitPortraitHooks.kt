@@ -702,15 +702,24 @@ object SplitPortraitHooks {
         val currentPlaylistId = (invokeNoArg(currentPlaylist, "getId") as? String) ?: ""
         val currentPlaylistUrl = (invokeNoArg(currentPlaylist, "getUrl") as? String) ?: ""
         val currentPlaylistTitleRaw = (invokeNoArg(currentPlaylist, "getTitle") as? String) ?: ""
+        val activeChannelId = (invokeNoArg(activeChannel, "getId") as? String)?.trim()?.lowercase(java.util.Locale.ROOT).orEmpty()
+        val effectiveIsXtreamMode = isXtreamMode ||
+            !xtreamAccountName.isNullOrBlank() ||
+            currentPlaylistUrl.startsWith("xtream_account://") ||
+            currentPlaylistId.startsWith("xtream_") ||
+            activeChannelId.startsWith("xtream_") ||
+            activeChannelId.startsWith("vod_") ||
+            activeChannelId.startsWith("demo_live_") ||
+            activeChannelId.startsWith("demo_vod_")
 
         val indiaAvailable = !deletedPresetIds.contains("preset_india")
         val globalAvailable = !deletedPresetIds.contains("preset_global")
-        val noPlaylistsAvailable = !isXtreamMode && !indiaAvailable && !globalAvailable && customPlaylists.isEmpty()
+        val noPlaylistsAvailable = !effectiveIsXtreamMode && !indiaAvailable && !globalAvailable && customPlaylists.isEmpty()
 
         val shortSwitchLabel = remember(
             currentPlaylistId,
             currentPlaylistTitleRaw,
-            isXtreamMode,
+            effectiveIsXtreamMode,
             xtreamAccountName,
             noPlaylistsAvailable
         ) {
@@ -720,7 +729,7 @@ object SplitPortraitHooks {
                 formatShortPlaylistLabel(
                     playlistId = currentPlaylistId,
                     title = currentPlaylistTitleRaw,
-                    isXtreamMode = isXtreamMode,
+                    isXtreamMode = effectiveIsXtreamMode,
                     xtreamAccountName = xtreamAccountName
                 )
             }
@@ -879,7 +888,7 @@ object SplitPortraitHooks {
                         onDismissRequest = { showPlaylistMenu = false },
                         containerColor = palette.surface
                     ) {
-                        if (!isXtreamMode) {
+                        if (!effectiveIsXtreamMode) {
                             val allSource = getPresetSource("getALL")
                             val indiaSource = getPresetSource("getINDIA")
                             val globalSource = getPresetSource("getGLOBAL")
@@ -922,54 +931,88 @@ object SplitPortraitHooks {
                                     }
                                 )
                             }
-                        }
 
-                        val dropdownEntities = customPlaylists.filter { entity ->
-                            val url = (invokeNoArg(entity, "getUrl") as? String)?.trim() ?: ""
-                            if (isXtreamMode) {
-                                url.startsWith("xtream_account://")
-                            } else {
+                            val m3uEntities = customPlaylists.filter { entity ->
+                                val url = (invokeNoArg(entity, "getUrl") as? String)?.trim() ?: ""
                                 !url.startsWith("xtream_account://")
                             }
-                        }
 
-                        for (entity in dropdownEntities) {
-                            val id = (invokeNoArg(entity, "getId") as? Number)?.toLong() ?: continue
-                            val title = (invokeNoArg(entity, "getTitle") as? String)?.takeIf { it.isNotBlank() } ?: "Playlist"
-                            val url = (invokeNoArg(entity, "getUrl") as? String)?.trim() ?: ""
-                            val sourceId = "custom_$id"
-                            val isSelected = (currentPlaylistId == sourceId) ||
-                                (url.isNotEmpty() && currentPlaylistUrl == url) ||
-                                (isXtreamMode && !xtreamAccountName.isNullOrBlank() && title.equals(xtreamAccountName, ignoreCase = true))
-                            val prefix = when {
-                                url.startsWith("file://") -> "📁"
-                                url.startsWith("xtream_account://") -> "⚡"
-                                else -> "📺"
-                            }
-                            PlaylistDropdownOption(
-                                label = "$prefix  $title",
-                                isSelected = isSelected,
-                                palette = palette,
-                                onClick = {
-                                    showPlaylistMenu = false
-                                    val src = createPlaylistSource(sourceId, title, url, false)
-                                    if (src != null) {
-                                        onSelectPlaylist?.invoke(src)
+                            for (entity in m3uEntities) {
+                                val id = (invokeNoArg(entity, "getId") as? Number)?.toLong() ?: continue
+                                val title = (invokeNoArg(entity, "getTitle") as? String)?.takeIf { it.isNotBlank() } ?: "Playlist"
+                                val url = (invokeNoArg(entity, "getUrl") as? String)?.trim() ?: ""
+                                val sourceId = "custom_$id"
+                                val isSelected = (currentPlaylistId == sourceId) ||
+                                    (url.isNotEmpty() && currentPlaylistUrl == url)
+                                val prefix = if (url.startsWith("file://")) "📁" else "📺"
+                                PlaylistDropdownOption(
+                                    label = "$prefix  $title",
+                                    isSelected = isSelected,
+                                    palette = palette,
+                                    onClick = {
+                                        showPlaylistMenu = false
+                                        val src = createPlaylistSource(sourceId, title, url, false)
+                                        if (src != null) {
+                                            onSelectPlaylist?.invoke(src)
+                                        }
                                     }
-                                }
-                            )
-                        }
+                                )
+                            }
 
-                        if (!isXtreamMode && noPlaylistsAvailable) {
-                            PlaylistDropdownOption(
-                                label = "➕  Add Playlist",
-                                isSelected = false,
-                                palette = palette,
-                                onClick = {
-                                    showPlaylistMenu = false
-                                    openAddPlaylistDialog()
-                                }
-                            )
+                            if (noPlaylistsAvailable) {
+                                PlaylistDropdownOption(
+                                    label = "➕  Add Playlist",
+                                    isSelected = false,
+                                    palette = palette,
+                                    onClick = {
+                                        showPlaylistMenu = false
+                                        openAddPlaylistDialog()
+                                    }
+                                )
+                            }
+                        } else {
+                            // Xtream mode: show ONLY connected Xtream accounts (never M3U presets)
+                            val seenUrls = LinkedHashSet<String>()
+                            val xtreamItems = mutableListOf<Triple<String, String, String>>() // sourceId, title, url
+
+                            for (entity in customPlaylists) {
+                                val url = (invokeNoArg(entity, "getUrl") as? String)?.trim() ?: ""
+                                if (!url.startsWith("xtream_account://")) continue
+                                if (!seenUrls.add(url)) continue
+                                val id = (invokeNoArg(entity, "getId") as? Number)?.toLong() ?: 0L
+                                val title = (invokeNoArg(entity, "getTitle") as? String)?.takeIf { it.isNotBlank() } ?: "Xtream Account"
+                                xtreamItems.add(Triple("custom_$id", title, url))
+                            }
+
+                            val connectedAccounts = XtreamDemoHook.readCurrentXtreamAccountsSnapshot()
+                            for (acc in connectedAccounts) {
+                                val accId = (invokeNoArg(acc, "getId") as? Number)?.toLong() ?: continue
+                                val url = "xtream_account://$accId"
+                                if (!seenUrls.add(url)) continue
+                                val name = (invokeNoArg(acc, "getName") as? String)?.takeIf { it.isNotBlank() }
+                                    ?: (invokeNoArg(acc, "getUsername") as? String)?.takeIf { it.isNotBlank() }
+                                    ?: "Xtream Account"
+                                xtreamItems.add(Triple("xtream_$accId", name, url))
+                            }
+
+                            for ((sourceId, title, url) in xtreamItems) {
+                                val isSelected = (currentPlaylistId == sourceId) ||
+                                    (url.isNotEmpty() && currentPlaylistUrl == url) ||
+                                    (!xtreamAccountName.isNullOrBlank() && title.equals(xtreamAccountName, ignoreCase = true)) ||
+                                    (currentPlaylistTitleRaw.isNotBlank() && title.equals(currentPlaylistTitleRaw, ignoreCase = true))
+                                PlaylistDropdownOption(
+                                    label = "⚡  $title",
+                                    isSelected = isSelected,
+                                    palette = palette,
+                                    onClick = {
+                                        showPlaylistMenu = false
+                                        val src = createPlaylistSource(sourceId, title, url, false)
+                                        if (src != null) {
+                                            onSelectPlaylist?.invoke(src)
+                                        }
+                                    }
+                                )
+                            }
                         }
                     }
                 }
@@ -987,7 +1030,7 @@ object SplitPortraitHooks {
                                     activeChannel = activeChannel,
                                     playerManager = playerManager,
                                     currentPlaylist = currentPlaylist,
-                                    isXtreamMode = isXtreamMode,
+                                    isXtreamMode = effectiveIsXtreamMode,
                                     onRefresh = onRefresh
                                 )
                                 delay(1450L)

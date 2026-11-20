@@ -201,7 +201,7 @@ object XtreamDemoHook {
                 verticalArrangement = Arrangement.spacedBy(2.dp)
             ) {
                 Text(
-                    text = if (showAddAccountMode) "Add Your Xtream Account" else "Need a test server?",
+                    text = if (showAddAccountMode) "Add Account" else "Need a test server?",
                     color = textPrimary,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Bold,
@@ -210,7 +210,7 @@ object XtreamDemoHook {
                 )
                 Text(
                     text = if (showAddAccountMode) {
-                        "Demo connected • Add your own Xtream server"
+                        "Demo active • Add your server"
                     } else {
                         "One-tap connect to verified sample Xtream streams"
                     },
@@ -250,9 +250,9 @@ object XtreamDemoHook {
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = "Add Account",
+                        text = "Add",
                         color = Color.White,
-                        fontSize = 12.sp,
+                        fontSize = 12.5.sp,
                         fontWeight = FontWeight.Bold,
                         maxLines = 1,
                         softWrap = false
@@ -286,7 +286,7 @@ object XtreamDemoHook {
         return emptyList()
     }
 
-    private fun readCurrentXtreamAccountsSnapshot(): List<Any> {
+    internal fun readCurrentXtreamAccountsSnapshot(): List<Any> {
         val stateFromMain = readMainAppXtreamAccountsState()
         if (stateFromMain != null) {
             return (stateFromMain.value as? List<*>)?.filterNotNull().orEmpty()
