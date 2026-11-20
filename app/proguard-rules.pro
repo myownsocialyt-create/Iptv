@@ -123,5 +123,9 @@
 -keep class com.example.premium.SplitPortraitHooks { *; }
 -keep class com.example.premium.HybridCastManager { *; }
 -keep class com.example.premium.NotificationSyncBridge { *; }
+-keep class com.example.premium.PlayStoreUpdatePrompt { *; }
+-keep class androidx.compose.foundation.lazy.LazyDslKx { *; }
+-keep class androidx.compose.foundation.lazy.grid.LazyGridDslKx { *; }
+-keep class com.example.ui.scroll.** { *; }
 
 -dontwarn **

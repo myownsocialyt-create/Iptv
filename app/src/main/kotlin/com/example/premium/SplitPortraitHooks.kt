@@ -99,6 +99,9 @@ object SplitPortraitHooks {
     @Volatile
     private var pendingSearchTarget: Any? = null
 
+    @Volatile
+    private var lastSplitRootTarget: Any? = null
+
     // Optimistic reload spin trigger
     private var reloadPulseUntilMs by mutableLongStateOf(0L)
 
@@ -110,6 +113,7 @@ object SplitPortraitHooks {
     fun setPendingSearchPanelTarget(target: Any) {
         pendingActionTarget = null
         pendingSearchTarget = target
+        lastSplitRootTarget = target
     }
 
     @Composable
@@ -191,26 +195,42 @@ object SplitPortraitHooks {
         val onToggleFavorite = getField(target, "\$onToggleFavorite") as? Function1<Any, Any?>
         val onEnterPip = getField(target, "\$onEnterPip") as? Function0<Any?>
         val onToggleFullscreen = getField(target, "\$onToggleFullscreen") as? Function0<Any?>
-        val isXtreamMode = (getField(target, "\$isXtreamMode") as? Boolean) ?: false
-        val xtreamAccountName = getField(target, "\$xtreamAccountName") as? String
+        val isXtreamMode = (getField(target, "\$isXtreamMode") as? Boolean)
+            ?: (getField(lastSplitRootTarget, "\$isXtreamMode") as? Boolean)
+            ?: false
+        val xtreamAccountName = (getField(target, "\$xtreamAccountName") as? String)
+            ?: (getField(lastSplitRootTarget, "\$xtreamAccountName") as? String)
 
+        val channelId = (invokeNoArg(activeChannel, "getId") as? String)?.trim().orEmpty()
         val channelName = (invokeNoArg(activeChannel, "getName") as? String)?.trim().orEmpty()
         val logoUrl = (invokeNoArg(activeChannel, "getLogoUrl") as? String)?.trim().orEmpty()
         val category = (invokeNoArg(activeChannel, "getCategory") as? String)?.trim().orEmpty()
         val language = (invokeNoArg(activeChannel, "getLanguage") as? String)?.trim().orEmpty()
         val streamUrl = (invokeNoArg(activeChannel, "getStreamUrl") as? String)?.trim().orEmpty()
         val isFavFromChannel = (invokeNoArg(activeChannel, "isFavorite") as? Boolean) ?: false
+        val isMovieOrVodFlag = (invokeNoArg(activeChannel, "isMovieOrVod") as? Boolean) ?: false
+        val isVodChannel = HomeChannelCardHook.isMovieOrVodChannel(
+            isMovieOrVodFlag = isMovieOrVodFlag,
+            id = channelId,
+            streamUrl = streamUrl,
+            category = category
+        )
+        val currentPlaylist = getField(lastSplitRootTarget, "\$currentPlaylist")
+        val playlistUrl = (invokeNoArg(currentPlaylist, "getUrl") as? String)?.trim()?.takeIf { it.isNotEmpty() }
 
         ActionPanelContent(
             channelRef = activeChannel,
+            channelId = channelId,
             channelName = channelName,
             logoUrl = logoUrl,
             category = category,
             language = language,
             streamUrl = streamUrl,
             isFavorite = isFavFromChannel,
+            isVodChannel = isVodChannel,
             isXtreamMode = isXtreamMode,
             xtreamAccountName = xtreamAccountName,
+            playlistUrl = playlistUrl,
             palette = extractThemePalette(appColors, context),
             onFavoriteClick = {
                 try {
@@ -249,14 +269,17 @@ object SplitPortraitHooks {
     @Composable
     private fun ActionPanelContent(
         channelRef: Any,
+        channelId: String,
         channelName: String,
         logoUrl: String,
         category: String,
         language: String,
         streamUrl: String,
         isFavorite: Boolean,
+        isVodChannel: Boolean,
         isXtreamMode: Boolean,
         xtreamAccountName: String?,
+        playlistUrl: String?,
         palette: ThemePalette,
         onFavoriteClick: () -> Unit,
         onPipClick: () -> Unit,
@@ -394,7 +417,27 @@ object SplitPortraitHooks {
                     }
                 }
 
-                if (isXtreamMode && !xtreamAccountName.isNullOrBlank()) {
+                if (!isVodChannel && streamUrl.isNotBlank()) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    com.example.epg.LiveUpcomingHeaderBadge(
+                        context = context,
+                        channelId = channelId,
+                        channelName = channelName,
+                        streamUrl = streamUrl,
+                        isXtreamMode = isXtreamMode,
+                        playlistUrl = playlistUrl,
+                        viewModel = remember { discoverViewModel() },
+                        isDark = palette.isDark,
+                        surfaceColor = palette.surface,
+                        tileSurfaceColor = palette.tileSurface,
+                        borderColor = palette.border,
+                        primaryColor = palette.primary,
+                        textPrimary = palette.textPrimary,
+                        textSecondary = palette.textSecondary,
+                        textMuted = palette.textMuted,
+                        modifier = Modifier.widthIn(min = 68.dp, max = 132.dp)
+                    )
+                } else if (isXtreamMode && !xtreamAccountName.isNullOrBlank()) {
                     Spacer(modifier = Modifier.width(6.dp))
                     Box(
                         modifier = Modifier
@@ -1000,66 +1043,12 @@ object SplitPortraitHooks {
     ) {
         try {
             // 1. Retry/reload current playing video stream if active
-            if (playerManager != null && activeChannel != null) {
-                mainHandler.post {
-                    try {
-                        val currentCh = getField(playerManager, "currentChannel")
-                        if (currentCh != null) {
-                            val retryMethod = playerManager.javaClass.getMethod("retry")
-                            retryMethod.invoke(playerManager)
-                        } else {
-                            val playMethod = playerManager.javaClass.getMethod(
-                                "playChannel",
-                                activeChannel.javaClass,
-                                Boolean::class.javaPrimitiveType,
-                                Boolean::class.javaPrimitiveType
-                            )
-                            playMethod.invoke(playerManager, activeChannel, true, false)
-                        }
-                    } catch (t: Throwable) {
-                        Log.w(TAG, "Player reload failed", t)
-                    }
-                }
-            }
+            reloadActiveVideoStream(activeChannel, playerManager)
 
-            // 2. Purge stale PlaylistRepository cache so playlist actually re-fetches
+            // 2. Force-refresh only the currently selected playlist below the video player
             val vm = discoverViewModel()
-            val repo = getRepository(vm)
-            val currentUrl = (invokeNoArg(currentPlaylist, "getUrl") as? String)?.trim().orEmpty()
-            val currentId = (invokeNoArg(currentPlaylist, "getId") as? String)?.trim().orEmpty()
-
-            if (repo != null) {
-                try {
-                    val clearMethod = repo.javaClass.getMethod("clearCache", String::class.java)
-                    if (currentId == "preset_all" || currentUrl.isEmpty()) {
-                        // All Playlists aggregates individual URLs -> clear full cache!
-                        clearMethod.invoke(repo, null)
-                    } else {
-                        clearMethod.invoke(repo, currentUrl)
-                    }
-                } catch (t: Throwable) {
-                    Log.w(TAG, "Repository clearCache failed", t)
-                }
-            }
-
-            // 3. Invoke callback + force ViewModel refresh (fixes M3U All Playlists & Xtream mode!)
-            try {
-                onRefresh?.invoke()
-            } catch (t: Throwable) {
-                Log.w(TAG, "onRefresh callback threw", t)
-            }
-
-            if (vm != null) {
-                try {
-                    if (isXtreamMode) {
-                        vm.javaClass.getMethod("refreshXtreamChannels").invoke(vm)
-                    } else if (onRefresh == null || currentId == "preset_all") {
-                        vm.javaClass.getMethod("refreshPlaylistChannels").invoke(vm)
-                    }
-                } catch (t: Throwable) {
-                    Log.w(TAG, "ViewModel refresh invocation failed", t)
-                }
-            }
+            com.example.data.repository.ChannelDiskCache.registerViewModel(vm)
+            refreshSplitChannelList(vm, activeChannel, currentPlaylist, isXtreamMode, onRefresh)
 
             val toastMsg = if (activeChannel != null) {
                 "Reloading playlist & stream..."
@@ -1069,6 +1058,92 @@ object SplitPortraitHooks {
             Toast.makeText(context, toastMsg, Toast.LENGTH_SHORT).show()
         } catch (t: Throwable) {
             Log.e(TAG, "performWorkingReload failed", t)
+        }
+    }
+
+    private fun reloadActiveVideoStream(activeChannel: Any?, playerManager: Any?) {
+        if (playerManager == null || activeChannel == null) return
+        mainHandler.post {
+            try {
+                val currentCh = getField(playerManager, "currentChannel")
+                if (currentCh != null) {
+                    val retryMethod = playerManager.javaClass.getMethod("retry")
+                    retryMethod.invoke(playerManager)
+                } else {
+                    val playMethod = playerManager.javaClass.getMethod(
+                        "playChannel",
+                        activeChannel.javaClass,
+                        Boolean::class.javaPrimitiveType,
+                        Boolean::class.javaPrimitiveType
+                    )
+                    playMethod.invoke(playerManager, activeChannel, true, false)
+                }
+            } catch (t: Throwable) {
+                Log.w(TAG, "Player reload failed", t)
+            }
+        }
+    }
+
+    private fun resolveActiveChannelIsVod(activeChannel: Any?): Boolean? {
+        if (activeChannel == null) return null
+        val isVodFlag = invokeNoArg(activeChannel, "isMovieOrVod") as? Boolean
+        if (isVodFlag != null) return isVodFlag
+        val id = (invokeNoArg(activeChannel, "getId") as? String)?.trim().orEmpty()
+        return when {
+            id.startsWith("vod_") -> true
+            id.startsWith("xtream_") -> false
+            else -> null
+        }
+    }
+
+    private fun refreshSplitChannelList(
+        vm: Any?,
+        activeChannel: Any?,
+        currentPlaylist: Any?,
+        isXtreamMode: Boolean,
+        onRefresh: Function0<Any?>?
+    ) {
+        if (isXtreamMode) {
+            if (vm != null) {
+                try {
+                    val isVodOnly = resolveActiveChannelIsVod(activeChannel)
+                    com.example.data.repository.ChannelDiskCache.refreshSelectedXtreamOnly(vm, isVodOnly)
+                    return
+                } catch (t: Throwable) {
+                    Log.w(TAG, "Xtream selective refresh failed", t)
+                }
+            }
+            invokeOnRefreshSafe(onRefresh)
+            return
+        }
+
+        if (vm != null) {
+            try {
+                PremiumUiHooks.forceRefreshSplitChannels(vm, currentPlaylist, activeChannel)
+                return
+            } catch (t: Throwable) {
+                Log.w(TAG, "forceRefreshSplitChannels failed", t)
+            }
+        }
+
+        val repo = getRepository(vm)
+        val currentUrl = (invokeNoArg(currentPlaylist, "getUrl") as? String)?.trim().orEmpty()
+        if (repo != null && currentUrl.isNotEmpty()) {
+            try {
+                val clearMethod = repo.javaClass.getMethod("clearCache", String::class.java)
+                clearMethod.invoke(repo, currentUrl)
+            } catch (t: Throwable) {
+                Log.w(TAG, "Repository clearCache failed", t)
+            }
+        }
+        invokeOnRefreshSafe(onRefresh)
+    }
+
+    private fun invokeOnRefreshSafe(onRefresh: Function0<Any?>?) {
+        try {
+            onRefresh?.invoke()
+        } catch (t: Throwable) {
+            Log.w(TAG, "onRefresh callback threw", t)
         }
     }
 

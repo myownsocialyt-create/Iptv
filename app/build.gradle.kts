@@ -215,6 +215,10 @@ dependencies {
     // Google Play Billing Library
     implementation("com.android.billingclient:billing-ktx:8.0.0")
 
+    // Google Play In-App Updates (official Play Store update availability check)
+    implementation("com.google.android.play:app-update:2.1.0")
+    implementation("com.google.android.play:app-update-ktx:2.1.0")
+
     testImplementation(libs.junit)
     testImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.junit)

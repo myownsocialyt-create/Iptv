@@ -103,10 +103,15 @@ import java.util.UUID
 import java.util.WeakHashMap
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -194,6 +199,13 @@ object PremiumUiHooks {
     private val customPlaylistJobs = ConcurrentHashMap<Long, Job>()
     private val notifiedCustomKeys = ConcurrentHashMap.newKeySet<String>()
     private val recentlyDeletedCustomIds = ConcurrentHashMap<Long, Long>()
+    private val splitAllRefreshToken = AtomicLong(0L)
+
+    @Volatile
+    private var splitAllRefreshJob: Job? = null
+
+    @Volatile
+    private var splitCustomSyncJob: Job? = null
 
     @Volatile
     private var latestCustomEntities: List<Any> = emptyList()
@@ -356,6 +368,7 @@ object PremiumUiHooks {
                             resetStuckPipState(act)
                         }
                         checkRemoteMinimumVersion(act)
+                        PlayStoreUpdatePrompt.onActivityResumed(act)
                         startupBillingHelper?.queryActivePurchases { isActive ->
                             if (!isActive) {
                                 enforceFreeTierLimitsIfNeeded(act)
@@ -372,7 +385,9 @@ object PremiumUiHooks {
                     }
                 }
 
-                override fun onActivityPaused(act: Activity) {}
+                override fun onActivityPaused(act: Activity) {
+                    PlayStoreUpdatePrompt.onActivityPaused(act)
+                }
                 override fun onActivityStopped(act: Activity) {
                     if (isMainActivity(act)) {
                         onMainActivityStoppedHook(act)
@@ -393,6 +408,7 @@ object PremiumUiHooks {
                         activeForceUpdateActivityRef = null
                         activeForceUpdateDialogRef = null
                     }
+                    PlayStoreUpdatePrompt.onActivityDestroyed(act)
                 }
             })
         }
@@ -402,6 +418,7 @@ object PremiumUiHooks {
     fun onMainActivityCreate(activity: Activity) {
         try {
             appContext = activity.applicationContext
+            com.example.data.repository.ChannelDiskCache.initAndPrewarm(activity.applicationContext)
             currentActivityRef = WeakReference(activity)
             ensureLifecycleCallbacks(activity)
             NotificationSyncBridge.onActivityCreatedOrStarted(activity)
@@ -545,6 +562,369 @@ object PremiumUiHooks {
         }
         if (chRefreshFlow != null) {
             chRefreshFlow.value = maxOf(now + 1L, chRefreshFlow.value + 1L)
+        }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun setPlaylistLoadingState(viewModel: Any, loading: Boolean) {
+        try {
+            val loadingFlow = safeGetField(viewModel, "_isPlaylistLoading") as? MutableStateFlow<Boolean>
+            loadingFlow?.value = loading
+        } catch (_: Throwable) {
+        }
+    }
+
+    private fun clearRepoCacheSafe(repo: Any?, url: String?) {
+        if (repo == null) return
+        try {
+            val clearMethod = repo.javaClass.getMethod("clearCache", String::class.java)
+            clearMethod.invoke(repo, url)
+        } catch (t: Throwable) {
+            Log.w(TAG, "clearRepoCacheSafe failed", t)
+        }
+    }
+
+    private fun collectActiveCustomEntities(viewModel: Any): List<Any> {
+        val now = System.currentTimeMillis()
+        val rawEntities: List<Any> = latestCustomEntities.ifEmpty {
+            ((safeCall(viewModel, "getCustomPlaylists") as? StateFlow<*>)?.value as? Collection<*>)
+                ?.filterNotNull()
+                ?: emptyList()
+        }
+        return rawEntities.filter { entity ->
+            val id = (safeCall(entity, "getId") as? Number)?.toLong() ?: return@filter false
+            !isCustomIdRecentlyDeleted(id, now)
+        }
+    }
+
+    private suspend fun fetchPlaylistSourceNow(repo: Any, source: Any): List<Any>? {
+        return try {
+            val loadMethod = repo.javaClass.getMethod("loadChannels", source.javaClass)
+            val flow = loadMethod.invoke(repo, source) as? Flow<*> ?: return null
+            var latestNonEmpty: List<Any>? = null
+            flow.collect { emitted ->
+                val list = (emitted as? List<*>)?.filterNotNull()
+                if (!list.isNullOrEmpty()) {
+                    latestNonEmpty = list
+                }
+            }
+            latestNonEmpty
+        } catch (ce: CancellationException) {
+            throw ce
+        } catch (t: Throwable) {
+            Log.w(TAG, "fetchPlaylistSourceNow failed", t)
+            null
+        }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun bumpMatchingRefreshTriggers(viewModel: Any, targetId: String, targetUrl: String) {
+        val refreshFlow = safeGetField(viewModel, "_refreshTrigger") as? MutableStateFlow<Long>
+        val chRefreshFlow = safeGetField(viewModel, "_channelRefreshTrigger") as? MutableStateFlow<Long>
+        val selPlaylist = (safeGetField(viewModel, "_selectedPlaylist") as? StateFlow<*>)?.value
+        val chSelPlaylist = (safeGetField(viewModel, "_channelSelectedPlaylist") as? StateFlow<*>)?.value
+
+        val matchesHome = matchesPlaylistTarget(selPlaylist, targetId, targetUrl)
+        val matchesChannel = matchesPlaylistTarget(chSelPlaylist, targetId, targetUrl)
+        val now = System.currentTimeMillis()
+
+        if (matchesHome && refreshFlow != null) {
+            refreshFlow.value = maxOf(now, refreshFlow.value + 1L)
+        }
+        if (matchesChannel && chRefreshFlow != null) {
+            chRefreshFlow.value = maxOf(now + 1L, chRefreshFlow.value + 1L)
+        }
+        if (!matchesHome && !matchesChannel) {
+            if (chRefreshFlow != null) {
+                chRefreshFlow.value = maxOf(now + 1L, chRefreshFlow.value + 1L)
+            } else if (refreshFlow != null) {
+                refreshFlow.value = maxOf(now, refreshFlow.value + 1L)
+            }
+        }
+    }
+
+    private fun matchesPlaylistTarget(playlist: Any?, targetId: String, targetUrl: String): Boolean {
+        if (playlist == null) return false
+        val id = (safeCall(playlist, "getId") as? String)?.trim().orEmpty()
+        val url = (safeCall(playlist, "getUrl") as? String)?.trim().orEmpty()
+        if (targetId.isNotEmpty() && id == targetId) return true
+        if (targetUrl.isNotEmpty() && url == targetUrl) return true
+        return false
+    }
+
+    private fun isUrlCachedInRepo(repo: Any, url: String): Boolean {
+        if (url.isEmpty()) return false
+        return try {
+            val cacheMap = safeGetField(repo, "playlistCache") as? Map<*, *>
+            val cachedList = cacheMap?.get(url) as? Collection<*>
+            cachedList != null && cachedList.isNotEmpty()
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    @JvmStatic
+    fun forceRefreshSplitChannels(viewModel: Any?, currentPlaylist: Any?) {
+        forceRefreshSplitChannels(viewModel, currentPlaylist, null)
+    }
+
+    @JvmStatic
+    fun forceRefreshSplitChannels(viewModel: Any?, currentPlaylist: Any?, activeChannel: Any?) {
+        val vm = viewModel ?: discoverViewModelIfNeeded() ?: return
+        com.example.data.repository.ChannelDiskCache.registerViewModel(vm)
+        val repo = getRepositoryInstance(vm)
+
+        val resolvedPlaylist = currentPlaylist
+            ?: (safeGetField(vm, "_channelSelectedPlaylist") as? StateFlow<*>)?.value
+            ?: (safeGetField(vm, "_selectedPlaylist") as? StateFlow<*>)?.value
+
+        val currentId = (safeCall(resolvedPlaylist, "getId") as? String)?.trim().orEmpty()
+        val currentUrl = (safeCall(resolvedPlaylist, "getUrl") as? String)?.trim().orEmpty()
+        val currentTitle = (safeCall(resolvedPlaylist, "getTitle") as? String)?.trim().orEmpty()
+
+        when {
+            currentId == "none" -> return
+            currentId == "preset_all" -> {
+                refreshMissingOrActiveInAllPlaylists(vm, repo, activeChannel)
+            }
+            currentId.startsWith("custom_") -> {
+                refreshCustomPlaylistFromNetwork(vm, repo, currentId, currentTitle, currentUrl)
+            }
+            currentUrl.isNotEmpty() -> {
+                cancelPendingAllPlaylistsRefresh()
+                clearRepoCacheSafe(repo, currentUrl)
+                setPlaylistLoadingState(vm, true)
+                bumpMatchingRefreshTriggers(vm, currentId, currentUrl)
+            }
+        }
+    }
+
+    private fun cancelPendingAllPlaylistsRefresh() {
+        splitAllRefreshToken.incrementAndGet()
+        splitAllRefreshJob?.cancel()
+        splitAllRefreshJob = null
+        com.example.data.repository.ChannelDiskCache.setAllPlaylistsRefreshing(false)
+    }
+
+    private fun resolveChannelSourceInAll(
+        vm: Any,
+        activeChannel: Any?,
+        presetSources: List<Any>,
+        customEntities: List<Any>
+    ): Pair<Any?, Long?> {
+        val playlistName = (safeCall(activeChannel, "getPlaylistName") as? String)?.trim().orEmpty()
+        if (playlistName.isEmpty()) return Pair(null, null)
+
+        for (entity in customEntities) {
+            val id = (safeCall(entity, "getId") as? Number)?.toLong() ?: continue
+            val title = (safeCall(entity, "getTitle") as? String)?.trim().orEmpty()
+            val url = (safeCall(entity, "getUrl") as? String)?.trim().orEmpty()
+            if (url.isNotEmpty() && title.equals(playlistName, ignoreCase = true)) {
+                return Pair(createPlaylistSource("custom_$id", title, url, false), id)
+            }
+        }
+        for (source in presetSources) {
+            val id = (safeCall(source, "getId") as? String)?.trim().orEmpty()
+            val title = (safeCall(source, "getTitle") as? String)?.trim().orEmpty()
+            val matchesIndia = id == "preset_india" && playlistName.contains("india", ignoreCase = true)
+            val matchesGlobal = id == "preset_global" && playlistName.contains("global", ignoreCase = true)
+            if (title.equals(playlistName, ignoreCase = true) || matchesIndia || matchesGlobal) {
+                return Pair(source, null)
+            }
+        }
+        return Pair(null, null)
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun refreshMissingOrActiveInAllPlaylists(vm: Any, repo: Any?, activeChannel: Any?) {
+        if (repo == null) return
+        val token = splitAllRefreshToken.incrementAndGet()
+        splitAllRefreshJob?.cancel()
+
+        val presetSources = ArrayList<Any>()
+        if (!isPresetDeleted(vm, "preset_india")) {
+            getPresetSourceByName("getINDIA")?.let { presetSources.add(it) }
+        }
+        if (!isPresetDeleted(vm, "preset_global")) {
+            getPresetSourceByName("getGLOBAL")?.let { presetSources.add(it) }
+        }
+        val customEntities = collectActiveCustomEntities(vm)
+
+        // Only fetch playlists that have NOT loaded yet (never wipe already-loaded playlists).
+        val missingPresets = presetSources.filter { src ->
+            val u = (safeCall(src, "getUrl") as? String)?.trim().orEmpty()
+            u.isNotEmpty() && !isUrlCachedInRepo(repo, u)
+        }
+        val missingCustoms = customEntities.filter { entity ->
+            val u = (safeCall(entity, "getUrl") as? String)?.trim().orEmpty()
+            u.isNotEmpty() && !isUrlCachedInRepo(repo, u)
+        }
+
+        if (missingPresets.isEmpty() && missingCustoms.isEmpty()) {
+            // Everything is already loaded: refresh only the active channel's single playlist if known.
+            val (activeSource, activeCustomId) = resolveChannelSourceInAll(
+                vm, activeChannel, presetSources, customEntities
+            )
+            if (activeSource == null) {
+                bumpMatchingRefreshTriggers(vm, "preset_all", "")
+                return
+            }
+            val activeUrl = (safeCall(activeSource, "getUrl") as? String)?.trim().orEmpty()
+            if (activeUrl.isEmpty()) {
+                bumpMatchingRefreshTriggers(vm, "preset_all", "")
+                return
+            }
+            setPlaylistLoadingState(vm, true)
+            clearRepoCacheSafe(repo, activeUrl)
+            splitAllRefreshJob = ioScope.launch {
+                try {
+                    val fresh = fetchPlaylistSourceNow(repo, activeSource)
+                    if (activeCustomId != null && !fresh.isNullOrEmpty() && !isCustomIdRecentlyDeleted(activeCustomId)) {
+                        try {
+                            val repoCache = safeGetField(repo, "playlistCache") as? MutableMap<Any, Any>
+                            repoCache?.put(activeUrl, fresh)
+                        } catch (_: Throwable) {
+                        }
+                        customChannelsCache[activeCustomId] = fresh
+                        customPlaylistUrls[activeCustomId] = activeUrl
+                        notifiedCustomKeys.add("$activeCustomId|$activeUrl")
+                        pushCustomChannelsToViewModel(vm)
+                    }
+                } catch (ce: CancellationException) {
+                    throw ce
+                } catch (t: Throwable) {
+                    Log.w(TAG, "Active playlist refresh inside All failed", t)
+                } finally {
+                    if (splitAllRefreshToken.get() == token) {
+                        bumpMatchingRefreshTriggers(vm, "preset_all", "")
+                        setPlaylistLoadingState(vm, false)
+                    }
+                }
+            }
+            return
+        }
+
+        // Fetch ONLY the missing/unloaded playlists without clearing already-loaded ones.
+        setPlaylistLoadingState(vm, true)
+        splitAllRefreshJob = ioScope.launch {
+            try {
+                coroutineScope {
+                    val tasks = ArrayList<kotlinx.coroutines.Deferred<Unit>>()
+                    for (source in missingPresets) {
+                        val u = (safeCall(source, "getUrl") as? String)?.trim().orEmpty()
+                        clearRepoCacheSafe(repo, u)
+                        tasks.add(async {
+                            fetchPlaylistSourceNow(repo, source)
+                            Unit
+                        })
+                    }
+                    for (entity in missingCustoms) {
+                        val id = (safeCall(entity, "getId") as? Number)?.toLong() ?: continue
+                        val title = (safeCall(entity, "getTitle") as? String)?.takeIf { it.isNotBlank() } ?: "Custom Playlist"
+                        val url = (safeCall(entity, "getUrl") as? String)?.trim().orEmpty()
+                        if (url.isEmpty()) continue
+                        val source = createPlaylistSource("custom_$id", title, url, false) ?: continue
+                        clearRepoCacheSafe(repo, url)
+                        tasks.add(async {
+                            val list = fetchPlaylistSourceNow(repo, source)
+                            if (!list.isNullOrEmpty() && !isCustomIdRecentlyDeleted(id)) {
+                                try {
+                                    val repoCache = safeGetField(repo, "playlistCache") as? MutableMap<Any, Any>
+                                    repoCache?.put(url, list)
+                                } catch (_: Throwable) {
+                                }
+                                customChannelsCache[id] = list
+                                customPlaylistUrls[id] = url
+                                notifiedCustomKeys.add("$id|$url")
+                                pushCustomChannelsToViewModel(vm)
+                            }
+                        })
+                    }
+                    tasks.awaitAll()
+                }
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (t: Throwable) {
+                Log.w(TAG, "refreshMissingOrActiveInAllPlaylists failed", t)
+            } finally {
+                if (splitAllRefreshToken.get() == token) {
+                    bumpMatchingRefreshTriggers(vm, "preset_all", "")
+                    setPlaylistLoadingState(vm, false)
+                }
+            }
+        }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun refreshCustomPlaylistFromNetwork(
+        vm: Any,
+        repo: Any?,
+        customIdStr: String,
+        title: String,
+        url: String
+    ) {
+        cancelPendingAllPlaylistsRefresh()
+        if (url.isEmpty()) return
+        val customId = customIdStr.removePrefix("custom_").toLongOrNull()
+        if (customId != null) {
+            customPlaylistJobs.remove(customId)?.cancel()
+            customChannelsCache.remove(customId)
+            val nkIter = notifiedCustomKeys.iterator()
+            while (nkIter.hasNext()) {
+                if (nkIter.next().startsWith("${customId}|")) {
+                    nkIter.remove()
+                }
+            }
+            pushCustomChannelsToViewModel(vm)
+        }
+
+        clearRepoCacheSafe(repo, url)
+        setPlaylistLoadingState(vm, true)
+        bumpMatchingRefreshTriggers(vm, customIdStr, url)
+
+        if (customId == null || repo == null) return
+
+        val selUrl = (safeCall((safeGetField(vm, "_selectedPlaylist") as? StateFlow<*>)?.value, "getUrl") as? String)?.trim().orEmpty()
+        val chSelUrl = (safeCall((safeGetField(vm, "_channelSelectedPlaylist") as? StateFlow<*>)?.value, "getUrl") as? String)?.trim().orEmpty()
+        val isObservedByVmFlow = (selUrl == url || chSelUrl == url)
+
+        if (isObservedByVmFlow) {
+            syncCustomCacheAfterTriggerRefresh(vm, repo, customId, title.ifBlank { "Custom Playlist" }, url)
+        } else {
+            ensureCustomPlaylistLoaded(vm, customId, title.ifBlank { "Custom Playlist" }, url)
+        }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun syncCustomCacheAfterTriggerRefresh(
+        vm: Any,
+        repo: Any,
+        customId: Long,
+        title: String,
+        url: String
+    ) {
+        splitCustomSyncJob?.cancel()
+        splitCustomSyncJob = ioScope.launch {
+            try {
+                for (attempt in 0 until 150) {
+                    delay(200L)
+                    if (isCustomIdRecentlyDeleted(customId)) return@launch
+                    val repoCache = safeGetField(repo, "playlistCache") as? MutableMap<Any, Any>
+                    val fresh = (repoCache?.get(url) as? List<*>)?.filterNotNull()
+                    if (!fresh.isNullOrEmpty()) {
+                        customChannelsCache[customId] = fresh
+                        customPlaylistUrls[customId] = url
+                        notifiedCustomKeys.add("$customId|$url")
+                        pushCustomChannelsToViewModel(vm)
+                        return@launch
+                    }
+                }
+                ensureCustomPlaylistLoaded(vm, customId, title, url)
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (t: Throwable) {
+                Log.w(TAG, "syncCustomCacheAfterTriggerRefresh failed", t)
+            }
         }
     }
 
@@ -806,6 +1186,7 @@ object PremiumUiHooks {
             if (!deletedUrl.isNullOrEmpty()) {
                 try {
                     repoCache?.remove(deletedUrl)
+                    com.example.data.repository.ChannelDiskCache.removePlaylist(deletedUrl)
                 } catch (_: Throwable) {
                 }
             }
@@ -925,12 +1306,14 @@ object PremiumUiHooks {
                 if (deletedSet.contains("preset_india")) {
                     try {
                         repoCache?.remove("https://iptv-org.github.io/iptv/countries/in.m3u")
+                        com.example.data.repository.ChannelDiskCache.removePlaylist("https://iptv-org.github.io/iptv/countries/in.m3u")
                     } catch (_: Throwable) {
                     }
                 }
                 if (deletedSet.contains("preset_global")) {
                     try {
                         repoCache?.remove("https://iptv-org.github.io/iptv/index.m3u")
+                        com.example.data.repository.ChannelDiskCache.removePlaylist("https://iptv-org.github.io/iptv/index.m3u")
                     } catch (_: Throwable) {
                     }
                 }
@@ -1637,7 +2020,7 @@ object PremiumUiHooks {
         return activePresets
     }
 
-    private fun isAppInDarkMode(context: Context, viewModel: Any? = null): Boolean {
+    internal fun isAppInDarkMode(context: Context, viewModel: Any? = null): Boolean {
         val vm = viewModel ?: lastKnownViewModelRef?.get()
         if (vm != null) {
             try {
@@ -1956,7 +2339,11 @@ object PremiumUiHooks {
         return false
     }
 
-    private fun openPlayStoreForUpdate(context: Context) {
+    internal fun isForceUpdateActive(): Boolean {
+        return isForceUpdateRequired || (activeForceUpdateDialogRef?.get()?.isShowing == true)
+    }
+
+    internal fun openPlayStoreForUpdate(context: Context) {
         val pkgName = context.packageName.ifBlank { "com.hypnotix.iptv" }
         try {
             val playStoreIntent = Intent(
@@ -2763,7 +3150,17 @@ object PremiumUiHooks {
                 XtreamCoverBridge.ensureXtreamChannelCoverUrl(viewModel)
                 return false
             }
-            if (presetId == "split_refresh_playlist_button" && clsName.endsWith("HypnotixSplitScreen\$7\$2\$2")) {
+            if (presetId == "\$this\$Card" && clsName.endsWith("HomeChannelCard\$1")) {
+                HomeChannelCardHook.setPendingCardTarget(viewModel)
+                return false
+            }
+            if (presetId == "\$this\$Card" && clsName.endsWith("MiniHighlightCard\$1")) {
+                HomeChannelCardHook.setPendingMiniHighlightTarget(viewModel)
+                return false
+            }
+            if (presetId == "split_refresh_playlist_button" &&
+                (clsName.endsWith("HypnotixSplitScreen\$7\$2\$2") || clsName.endsWith("HypnotixSplitScreen\$7\$3\$2\$1\$2"))
+            ) {
                 SplitPortraitHooks.setPendingActionPanelTarget(viewModel)
                 return false
             }
@@ -3529,6 +3926,9 @@ object PremiumUiHooks {
     @androidx.compose.runtime.NonRestartableComposable
     @JvmStatic
     fun RenderHomeTopBarCrownAndDailyCheck() {
+        if (HomeChannelCardHook.tryRenderPendingHomeCard()) {
+            return
+        }
         val appearanceTarget = pendingAppearanceTarget
         if (appearanceTarget != null) {
             pendingAppearanceTarget = null
