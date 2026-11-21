@@ -55,6 +55,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.exoplayer.ExoPlayer
+import com.example.premium.AppUiTranslator
 import java.lang.reflect.Method
 import java.util.Locale
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -403,7 +404,7 @@ object VodPlaybackSpeedController {
                         )
                         if (timerText.isNotEmpty()) {
                             Text(
-                                text = timerText,
+                                text = AppUiTranslator.t(timerText),
                                 color = Color.White.copy(alpha = 0.92f),
                                 fontSize = if (isFullscreen) 12.sp else 10.5.sp,
                                 fontWeight = FontWeight.Medium,
@@ -521,7 +522,7 @@ object VodPlaybackSpeedController {
                         )
                 )
                 Text(
-                    text = if (isVod) "VOD Movie" else "Live Stream",
+                    text = AppUiTranslator.t(if (isVod) "VOD Movie" else "Live Stream"),
                     color = Color.White,
                     fontSize = if (isFullscreen) 11.sp else 9.5.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -569,13 +570,14 @@ object VodPlaybackSpeedController {
         val pillHeight = if (isFullscreen) 32.dp else 28.dp
 
         Box {
+            val speedContentDesc = AppUiTranslator.t("Playback speed ${formatSpeedLabel(activeSpeed)}")
             Surface(
                 onClick = { expanded = true },
                 modifier = Modifier
                     .height(pillHeight)
                     .testTag("vod_playback_speed_button")
                     .semantics {
-                        contentDescription = "Playback speed ${formatSpeedLabel(activeSpeed)}"
+                        contentDescription = speedContentDesc
                     },
                 color = containerColor,
                 shape = RoundedCornerShape(8.dp),
@@ -615,7 +617,7 @@ object VodPlaybackSpeedController {
                             ) {
                                 Text(
                                     text = if (speedOption == DEFAULT_SPEED) {
-                                        "1x (Normal)"
+                                        AppUiTranslator.t("1x (Normal)")
                                     } else {
                                         formatSpeedLabel(speedOption)
                                     },
@@ -627,7 +629,7 @@ object VodPlaybackSpeedController {
                                     Spacer(modifier = Modifier.width(4.dp))
                                     Icon(
                                         imageVector = Icons.Filled.Check,
-                                        contentDescription = "Selected speed",
+                                        contentDescription = AppUiTranslator.t("Selected speed"),
                                         tint = Color(0xFFE50914),
                                         modifier = Modifier.size(16.dp)
                                     )
@@ -663,7 +665,7 @@ object VodPlaybackSpeedController {
             Box(contentAlignment = Alignment.Center) {
                 Icon(
                     imageVector = if (isFullscreen) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen,
-                    contentDescription = if (isFullscreen) "Exit Fullscreen" else "Enter Fullscreen",
+                    contentDescription = AppUiTranslator.t(if (isFullscreen) "Exit Fullscreen" else "Enter Fullscreen"),
                     tint = Color.White,
                     modifier = Modifier.size(iconSize)
                 )

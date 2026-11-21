@@ -303,7 +303,7 @@ object PlayStoreUpdatePrompt {
         }
 
         val titleView = TextView(activity).apply {
-            text = "New Version Available"
+            text = AppUiTranslator.tx("New Version Available", activity)
             setTextColor(titleColor)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
@@ -320,7 +320,10 @@ object PlayStoreUpdatePrompt {
         )
 
         val messageView = TextView(activity).apply {
-            text = "A newer version of this app is available on Google Play Store. Download the latest update for improvements and fixes."
+            text = AppUiTranslator.tx(
+                "A newer version of this app is available on Google Play Store. Download the latest update for improvements and fixes.",
+                activity
+            )
             setTextColor(bodyColor)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
             gravity = Gravity.START
@@ -344,8 +347,8 @@ object PlayStoreUpdatePrompt {
         val minTouchHeight = dpToPx(activity, 48f)
 
         val remindLaterBtn = TextView(activity).apply {
-            text = "Remind Later"
-            contentDescription = "Remind later about app update"
+            text = AppUiTranslator.tx("Remind Later", activity)
+            contentDescription = AppUiTranslator.tx("Remind later about app update", activity)
             setTextColor(secondaryBtnText)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
@@ -371,8 +374,8 @@ object PlayStoreUpdatePrompt {
         )
 
         val updateBtn = TextView(activity).apply {
-            text = "Update"
-            contentDescription = "Download new version from Google Play Store"
+            text = AppUiTranslator.tx("Update", activity)
+            contentDescription = AppUiTranslator.tx("Download new version from Google Play Store", activity)
             setTextColor(primaryBtnText)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)

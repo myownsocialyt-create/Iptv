@@ -673,7 +673,7 @@ object HybridCastManager {
             .substringBefore("/")
             .trim()
         if (cleaned.isEmpty()) {
-            Toast.makeText(context, "Enter your Smart TV IP (e.g. 192.168.1.50)", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, AppUiTranslator.tx("Enter your Smart TV IP (e.g. 192.168.1.50)", context), Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -716,12 +716,12 @@ object HybridCastManager {
                 isScanning = false
                 if (foundAny) {
                     statusMessage = "Found Smart TV at $cleaned!"
-                    Toast.makeText(context, "Smart TV connected from $cleaned", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, AppUiTranslator.tx("Smart TV connected from $cleaned", context), Toast.LENGTH_SHORT).show()
                 } else {
                     statusMessage = "No DLNA descriptor on $cleaned — use Web TV Cast link on TV browser!"
                     Toast.makeText(
                         context,
-                        "DLNA port not open on $cleaned. Turn on Web TV Server below & open link in TV browser!",
+                        AppUiTranslator.tx("DLNA port not open on $cleaned. Turn on Web TV Server below & open link in TV browser!", context),
                         Toast.LENGTH_LONG
                     ).show()
                 }
@@ -863,7 +863,7 @@ object HybridCastManager {
         val cleanStreamUrl = stripPipeSuffix(snap.streamUrl)
         if (cleanStreamUrl.isBlank()) {
             if (showToast) {
-                Toast.makeText(context, "Play a live channel first to cast", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, AppUiTranslator.tx("Play a live channel first to cast", context), Toast.LENGTH_SHORT).show()
             }
             return
         }
@@ -885,7 +885,7 @@ object HybridCastManager {
             if (showToast) {
                 Toast.makeText(
                     context,
-                    "${device.name} uses Cast/Web receiver. Open $webServerUrl on TV or use System Cast!",
+                    AppUiTranslator.tx("${device.name} uses Cast/Web receiver. Open $webServerUrl on TV or use System Cast!", context),
                     Toast.LENGTH_LONG
                 ).show()
             }
@@ -920,7 +920,7 @@ object HybridCastManager {
                     statusMessage = "Casting '${snap.name}' on ${device.name}"
                     syncLocalPlayerForCastState()
                     if (showToast) {
-                        Toast.makeText(context, "Casting '${snap.name}' to ${device.name}", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, AppUiTranslator.tx("Casting '${snap.name}' to ${device.name}", context), Toast.LENGTH_SHORT).show()
                     }
                 } else {
                     // Fallback: auto-enable Web TV Server so user always has an instant working fallback
@@ -929,7 +929,7 @@ object HybridCastManager {
                     if (showToast) {
                         Toast.makeText(
                             context,
-                            "TV rejected direct DLNA stream. Try toggling 'Proxy Mode' or open $webServerUrl on TV!",
+                            AppUiTranslator.tx("TV rejected direct DLNA stream. Try toggling 'Proxy Mode' or open $webServerUrl on TV!", context),
                             Toast.LENGTH_LONG
                         ).show()
                     }
@@ -1038,7 +1038,7 @@ object HybridCastManager {
         isRemotePaused = false
         statusMessage = "Cast disconnected"
         syncLocalPlayerForCastState()
-        Toast.makeText(context, "Disconnected from Cast", Toast.LENGTH_SHORT).show()
+        Toast.makeText(context, AppUiTranslator.tx("Disconnected from Cast", context), Toast.LENGTH_SHORT).show()
     }
 
     private fun sendDlnaSetAvTransportAndPlay(
@@ -1643,14 +1643,14 @@ object HybridCastManager {
             } catch (_: Throwable) {
             }
         }
-        Toast.makeText(context, "Could not open System Cast settings on this device", Toast.LENGTH_SHORT).show()
+        Toast.makeText(context, AppUiTranslator.tx("Could not open System Cast settings on this device", context), Toast.LENGTH_SHORT).show()
     }
 
     fun castViaExternalApp(context: Context, specificPackage: String? = null) {
         val snap = currentChannel
         val cleanStreamUrl = stripPipeSuffix(snap.streamUrl)
         if (cleanStreamUrl.isBlank()) {
-            Toast.makeText(context, "Select and play a live channel first", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, AppUiTranslator.tx("Select and play a live channel first", context), Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -1675,7 +1675,7 @@ object HybridCastManager {
             if (!specificPackage.isNullOrBlank()) {
                 context.startActivity(viewIntent)
             } else {
-                val chooser = Intent.createChooser(viewIntent, "Cast '${snap.name}' via App").apply {
+                val chooser = Intent.createChooser(viewIntent, AppUiTranslator.tx("Cast '${snap.name}' via App", context)).apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
                 context.startActivity(chooser)
@@ -1689,12 +1689,12 @@ object HybridCastManager {
                     putExtra(Intent.EXTRA_TITLE, snap.name)
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
-                val chooser = Intent.createChooser(fallbackIntent, "Cast '${snap.name}' via App").apply {
+                val chooser = Intent.createChooser(fallbackIntent, AppUiTranslator.tx("Cast '${snap.name}' via App", context)).apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
                 context.startActivity(chooser)
             } catch (_: Throwable) {
-                Toast.makeText(context, "No external video/cast player app installed", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, AppUiTranslator.tx("No external video/cast player app installed", context), Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -1705,7 +1705,7 @@ object HybridCastManager {
         try {
             val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
             cm?.setPrimaryClip(ClipData.newPlainText(label, safeValue))
-            Toast.makeText(context, toastText, Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, AppUiTranslator.tx(toastText, context), Toast.LENGTH_SHORT).show()
         } catch (_: Throwable) {
         }
     }
@@ -1724,7 +1724,7 @@ object HybridCastManager {
                 putExtra(Intent.EXTRA_SUBJECT, "Cast ${snap.name}")
                 putExtra(Intent.EXTRA_TEXT, linkToShare)
             }
-            val chooser = Intent.createChooser(sendIntent, "Share Live Stream / TV Link").apply {
+            val chooser = Intent.createChooser(sendIntent, AppUiTranslator.tx("Share Live Stream / TV Link", context)).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             context.startActivity(chooser)
@@ -1874,6 +1874,7 @@ object HybridCastManager {
         isDark: Boolean,
         onOpenCastSheet: () -> Unit
     ) {
+        AppUiTranslator.rememberLanguageCode()
         val primaryRed = Color(0xFFE5253B)
         val surfaceBg = if (isDark) Color(0xFF17171C) else Color(0xFFFFF1F2)
         val borderCol = primaryRed.copy(alpha = 0.45f)
@@ -1881,14 +1882,14 @@ object HybridCastManager {
         val textSec = if (isDark) Color(0xFFB4B4BE) else Color(0xFF475569)
 
         val targetTitle = when (activeMode) {
-            ActiveCastMode.DLNA_DEVICE -> connectedDevice?.name ?: "Smart TV"
+            ActiveCastMode.DLNA_DEVICE -> connectedDevice?.name ?: AppUiTranslator.t("Smart TV")
             ActiveCastMode.WEB_TV_SERVER -> if (connectedWebClientCount > 0) {
-                "Web TV ($connectedWebClientCount TV Connected)"
+                AppUiTranslator.t("Web TV ($connectedWebClientCount TV Connected)")
             } else {
                 "Web TV: $webServerUrl"
             }
-            ActiveCastMode.SYSTEM_MIRROR -> connectedDevice?.name ?: "Wireless Display"
-            ActiveCastMode.NONE -> if (isWebServerRunning) "Web TV: $webServerUrl" else "Connected"
+            ActiveCastMode.SYSTEM_MIRROR -> connectedDevice?.name ?: AppUiTranslator.t("Wireless Display")
+            ActiveCastMode.NONE -> if (isWebServerRunning) "Web TV: $webServerUrl" else AppUiTranslator.t("Connected")
         }
 
         Surface(
@@ -1917,7 +1918,7 @@ object HybridCastManager {
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.CastConnected,
-                        contentDescription = "Active cast",
+                        contentDescription = AppUiTranslator.t("Active cast"),
                         tint = Color.White,
                         modifier = Modifier.size(16.dp)
                     )
@@ -1933,7 +1934,7 @@ object HybridCastManager {
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
-                        text = "Auto-syncing: ${currentChannel.name}",
+                        text = AppUiTranslator.t("Auto-syncing: ${currentChannel.name}"),
                         color = textSec,
                         fontSize = 10.5.sp,
                         maxLines = 1,
@@ -1956,7 +1957,7 @@ object HybridCastManager {
                     Box(contentAlignment = Alignment.Center) {
                         Icon(
                             imageVector = if (isRemotePaused) Icons.Rounded.PlayArrow else Icons.Rounded.Pause,
-                            contentDescription = if (isRemotePaused) "Resume TV" else "Pause TV",
+                            contentDescription = AppUiTranslator.t(if (isRemotePaused) "Resume TV" else "Pause TV"),
                             tint = primaryRed,
                             modifier = Modifier.size(16.dp)
                         )
@@ -1970,7 +1971,7 @@ object HybridCastManager {
                         .clip(CircleShape)
                         .clickable {
                             sendRemoteCommand(context, "RELOAD")
-                            Toast.makeText(context, "Re-syncing stream to TV...", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, AppUiTranslator.tx("Re-syncing stream to TV...", context), Toast.LENGTH_SHORT).show()
                         },
                     shape = CircleShape,
                     color = primaryRed.copy(alpha = 0.16f)
@@ -1978,7 +1979,7 @@ object HybridCastManager {
                     Box(contentAlignment = Alignment.Center) {
                         Icon(
                             imageVector = Icons.Rounded.Refresh,
-                            contentDescription = "Re-sync channel on TV",
+                            contentDescription = AppUiTranslator.t("Re-sync channel on TV"),
                             tint = primaryRed,
                             modifier = Modifier.size(15.dp)
                         )
@@ -1999,7 +2000,7 @@ object HybridCastManager {
                     Box(contentAlignment = Alignment.Center) {
                         Icon(
                             imageVector = Icons.Rounded.Stop,
-                            contentDescription = "Stop casting",
+                            contentDescription = AppUiTranslator.t("Stop casting"),
                             tint = Color.White,
                             modifier = Modifier.size(15.dp)
                         )
@@ -2015,6 +2016,7 @@ object HybridCastManager {
         isDark: Boolean,
         onDismiss: () -> Unit
     ) {
+        AppUiTranslator.rememberLanguageCode()
         val bgSurface = if (isDark) Color(0xFF101014) else Color(0xFFFFFFFF)
         val cardSurface = if (isDark) Color(0xFF1A1A20) else Color(0xFFF1F5F9)
         val elevatedSurface = if (isDark) Color(0xFF22222A) else Color(0xFFE2E8F0)
@@ -2084,7 +2086,7 @@ object HybridCastManager {
                         ) {
                             Icon(
                                 imageVector = if (isCastingActive) Icons.Rounded.CastConnected else Icons.Rounded.Cast,
-                                contentDescription = "Hybrid Cast",
+                                contentDescription = AppUiTranslator.t("Hybrid Cast"),
                                 tint = Color.White,
                                 modifier = Modifier.size(20.dp)
                             )
@@ -2098,7 +2100,7 @@ object HybridCastManager {
                                 horizontalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
                                 Text(
-                                    text = "Hybrid TV Cast",
+                                    text = AppUiTranslator.t("Hybrid TV Cast"),
                                     color = textPri,
                                     fontSize = 16.5.sp,
                                     fontWeight = FontWeight.ExtraBold
@@ -2113,7 +2115,7 @@ object HybridCastManager {
                                         .padding(horizontal = 6.dp, vertical = 2.dp)
                                 ) {
                                     Text(
-                                        text = if (isCastingActive) "CONNECTED" else "4-IN-1",
+                                        text = AppUiTranslator.t(if (isCastingActive) "CONNECTED" else "4-IN-1"),
                                         color = if (isCastingActive) accentGreen else primaryRed,
                                         fontSize = 9.5.sp,
                                         fontWeight = FontWeight.ExtraBold
@@ -2121,7 +2123,7 @@ object HybridCastManager {
                                 }
                             }
                             Text(
-                                text = "DLNA / UPnP • Web TV Browser • Miracast • External Cast",
+                                text = AppUiTranslator.t("DLNA / UPnP • Web TV Browser • Miracast • External Cast"),
                                 color = textSec,
                                 fontSize = 11.sp,
                                 maxLines = 1,
@@ -2135,7 +2137,7 @@ object HybridCastManager {
                         ) {
                             Icon(
                                 imageVector = Icons.Rounded.Close,
-                                contentDescription = "Close Cast dialog",
+                                contentDescription = AppUiTranslator.t("Close Cast dialog"),
                                 tint = textSec,
                                 modifier = Modifier.size(19.dp)
                             )
@@ -2168,7 +2170,7 @@ object HybridCastManager {
                                         .padding(horizontal = 6.dp, vertical = 2.dp)
                                 ) {
                                     Text(
-                                        text = "LIVE",
+                                        text = AppUiTranslator.t("LIVE"),
                                         color = Color.White,
                                         fontSize = 9.5.sp,
                                         fontWeight = FontWeight.ExtraBold
@@ -2176,7 +2178,7 @@ object HybridCastManager {
                                 }
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
-                                    text = currentChannel.name.ifBlank { "No Active Channel" },
+                                    text = currentChannel.name.ifBlank { AppUiTranslator.t("No Active Channel") },
                                     color = textPri,
                                     fontSize = 13.5.sp,
                                     fontWeight = FontWeight.Bold,
@@ -2185,7 +2187,7 @@ object HybridCastManager {
                                     modifier = Modifier.weight(1f)
                                 )
                                 Text(
-                                    text = if (currentChannel.streamUrl.contains(".m3u8", true)) "HLS/M3U8" else "STREAM",
+                                    text = AppUiTranslator.t(if (currentChannel.streamUrl.contains(".m3u8", true)) "HLS/M3U8" else "STREAM"),
                                     color = primaryRed,
                                     fontSize = 10.sp,
                                     fontWeight = FontWeight.Bold
@@ -2193,7 +2195,7 @@ object HybridCastManager {
                             }
 
                             Text(
-                                text = statusMessage,
+                                text = AppUiTranslator.t(statusMessage),
                                 color = if (isCastingActive) accentGreen else textSec,
                                 fontSize = 11.5.sp,
                                 fontWeight = FontWeight.Medium,
@@ -2213,7 +2215,7 @@ object HybridCastManager {
                                     RemoteChipButton(
                                         modifier = Modifier.weight(1f),
                                         icon = if (isRemotePaused) Icons.Rounded.PlayArrow else Icons.Rounded.Pause,
-                                        label = if (isRemotePaused) "Play TV" else "Pause TV",
+                                        label = AppUiTranslator.t(if (isRemotePaused) "Play TV" else "Pause TV"),
                                         containerColor = elevatedSurface,
                                         contentColor = textPri,
                                         onClick = {
@@ -2223,7 +2225,7 @@ object HybridCastManager {
                                     RemoteChipButton(
                                         modifier = Modifier.weight(1f),
                                         icon = if (isRemoteMuted) Icons.AutoMirrored.Rounded.VolumeOff else Icons.AutoMirrored.Rounded.VolumeUp,
-                                        label = if (isRemoteMuted) "Unmute" else "Mute TV",
+                                        label = AppUiTranslator.t(if (isRemoteMuted) "Unmute" else "Mute TV"),
                                         containerColor = elevatedSurface,
                                         contentColor = textPri,
                                         onClick = {
@@ -2233,7 +2235,7 @@ object HybridCastManager {
                                     RemoteChipButton(
                                         modifier = Modifier.weight(1f),
                                         icon = Icons.Rounded.Refresh,
-                                        label = "Re-Sync",
+                                        label = AppUiTranslator.t("Re-Sync"),
                                         containerColor = elevatedSurface,
                                         contentColor = textPri,
                                         onClick = {
@@ -2243,7 +2245,7 @@ object HybridCastManager {
                                     RemoteChipButton(
                                         modifier = Modifier.weight(1f),
                                         icon = Icons.Rounded.Stop,
-                                        label = "Stop",
+                                        label = AppUiTranslator.t("Stop"),
                                         containerColor = primaryRed,
                                         contentColor = Color.White,
                                         onClick = {
@@ -2268,7 +2270,7 @@ object HybridCastManager {
                     ) {
                         CastModeTabButton(
                             modifier = Modifier.weight(1f),
-                            title = "Smart TV / DLNA",
+                            title = AppUiTranslator.t("Smart TV / DLNA"),
                             icon = Icons.Rounded.Tv,
                             selected = selectedTab == 0,
                             primaryRed = primaryRed,
@@ -2278,7 +2280,7 @@ object HybridCastManager {
                         )
                         CastModeTabButton(
                             modifier = Modifier.weight(1f),
-                            title = "Web TV Link",
+                            title = AppUiTranslator.t("Web TV Link"),
                             icon = Icons.Rounded.Public,
                             selected = selectedTab == 1,
                             primaryRed = primaryRed,
@@ -2293,7 +2295,7 @@ object HybridCastManager {
                         )
                         CastModeTabButton(
                             modifier = Modifier.weight(1f),
-                            title = "Mirror & Apps",
+                            title = AppUiTranslator.t("Mirror & Apps"),
                             icon = Icons.Rounded.ScreenShare,
                             selected = selectedTab == 2,
                             primaryRed = primaryRed,
@@ -2332,7 +2334,7 @@ object HybridCastManager {
                                             modifier = Modifier.size(16.dp)
                                         )
                                         Text(
-                                            text = "Same Wi-Fi TVs (IP: $lanIp)",
+                                            text = AppUiTranslator.t("Same Wi-Fi TVs (IP: $lanIp)"),
                                             color = textPri,
                                             fontSize = 12.5.sp,
                                             fontWeight = FontWeight.Bold
@@ -2355,14 +2357,14 @@ object HybridCastManager {
                                         ) {
                                             Icon(
                                                 imageVector = Icons.Rounded.Refresh,
-                                                contentDescription = "Scan TVs",
+                                                contentDescription = AppUiTranslator.t("Scan TVs"),
                                                 tint = primaryRed,
                                                 modifier = Modifier
                                                     .size(14.dp)
                                                     .rotate(if (isScanning) spinAngle else 0f)
                                             )
                                             Text(
-                                                text = if (isScanning) "Scanning..." else "Rescan",
+                                                text = AppUiTranslator.t(if (isScanning) "Scanning..." else "Rescan"),
                                                 color = primaryRed,
                                                 fontSize = 11.sp,
                                                 fontWeight = FontWeight.Bold
@@ -2392,7 +2394,7 @@ object HybridCastManager {
                                                     strokeWidth = 2.5.dp
                                                 )
                                                 Text(
-                                                    text = "Searching for Smart TVs, DLNA Renderers & Cast devices...",
+                                                    text = AppUiTranslator.t("Searching for Smart TVs, DLNA Renderers & Cast devices..."),
                                                     color = textSec,
                                                     fontSize = 12.sp,
                                                     textAlign = TextAlign.Center
@@ -2405,13 +2407,13 @@ object HybridCastManager {
                                                     modifier = Modifier.size(28.dp)
                                                 )
                                                 Text(
-                                                    text = "No DLNA Smart TV detected yet",
+                                                    text = AppUiTranslator.t("No DLNA Smart TV detected yet"),
                                                     color = textPri,
                                                     fontSize = 13.sp,
                                                     fontWeight = FontWeight.SemiBold
                                                 )
                                                 Text(
-                                                    text = "Make sure your phone & TV are on the same Wi-Fi, or tap 'Web TV Link' tab to play on ANY Smart TV browser immediately!",
+                                                    text = AppUiTranslator.t("Make sure your phone & TV are on the same Wi-Fi, or tap 'Web TV Link' tab to play on ANY Smart TV browser immediately!"),
                                                     color = textSec,
                                                     fontSize = 11.sp,
                                                     textAlign = TextAlign.Center
@@ -2435,7 +2437,7 @@ object HybridCastManager {
                                                         )
                                                         Spacer(modifier = Modifier.width(5.dp))
                                                         Text(
-                                                            text = "Start Universal Web TV",
+                                                            text = AppUiTranslator.t("Start Universal Web TV"),
                                                             fontSize = 11.5.sp,
                                                             fontWeight = FontWeight.Bold
                                                         )
@@ -2450,7 +2452,7 @@ object HybridCastManager {
                                                         shape = RoundedCornerShape(9.dp)
                                                     ) {
                                                         Text(
-                                                            text = "System Cast",
+                                                            text = AppUiTranslator.t("System Cast"),
                                                             fontSize = 11.5.sp,
                                                             fontWeight = FontWeight.SemiBold
                                                         )
@@ -2527,7 +2529,7 @@ object HybridCastManager {
                                                         .padding(horizontal = 10.dp, vertical = 5.dp)
                                                 ) {
                                                     Text(
-                                                        text = if (isThisConnected) "Casting" else "Connect",
+                                                        text = AppUiTranslator.t(if (isThisConnected) "Casting" else "Connect"),
                                                         color = Color.White,
                                                         fontSize = 11.sp,
                                                         fontWeight = FontWeight.Bold
@@ -2558,13 +2560,13 @@ object HybridCastManager {
                                         ) {
                                             Column(modifier = Modifier.weight(1f)) {
                                                 Text(
-                                                    text = "DLNA Stream Proxy Mode",
+                                                    text = AppUiTranslator.t("DLNA Stream Proxy Mode"),
                                                     color = textPri,
                                                     fontSize = 12.5.sp,
                                                     fontWeight = FontWeight.SemiBold
                                                 )
                                                 Text(
-                                                    text = "Routes IPTV stream via phone so TVs bypass header/CORS blocks",
+                                                    text = AppUiTranslator.t("Routes IPTV stream via phone so TVs bypass header/CORS blocks"),
                                                     color = textSec,
                                                     fontSize = 10.5.sp
                                                 )
@@ -2590,7 +2592,7 @@ object HybridCastManager {
                                         HorizontalDivider(color = borderColor, thickness = 0.7.dp)
 
                                         Text(
-                                            text = "Connect Smart TV by IP Address (if Wi-Fi router blocks auto-scan)",
+                                            text = AppUiTranslator.t("Connect Smart TV by IP Address (if Wi-Fi router blocks auto-scan)"),
                                             color = textSec,
                                             fontSize = 11.sp,
                                             fontWeight = FontWeight.Medium
@@ -2617,7 +2619,7 @@ object HybridCastManager {
                                                 ) {
                                                     if (manualIpText.isEmpty()) {
                                                         Text(
-                                                            text = "e.g. 192.168.1.50",
+                                                            text = AppUiTranslator.t("e.g. 192.168.1.50"),
                                                             color = textMuted,
                                                             fontSize = 12.sp
                                                         )
@@ -2651,7 +2653,7 @@ object HybridCastManager {
                                                 modifier = Modifier.height(38.dp)
                                             ) {
                                                 Text(
-                                                    text = "Connect IP",
+                                                    text = AppUiTranslator.t("Connect IP"),
                                                     fontSize = 11.5.sp,
                                                     fontWeight = FontWeight.Bold
                                                 )
@@ -2707,16 +2709,16 @@ object HybridCastManager {
                                                 }
                                                 Column {
                                                     Text(
-                                                        text = "Wi-Fi Web TV Cast Server",
+                                                        text = AppUiTranslator.t("Wi-Fi Web TV Cast Server"),
                                                         color = textPri,
                                                         fontSize = 13.5.sp,
                                                         fontWeight = FontWeight.Bold
                                                     )
                                                     Text(
                                                         text = if (isWebServerRunning) {
-                                                            "Active • $connectedWebClientCount TV browser(s) connected"
+                                                            AppUiTranslator.t("Active • $connectedWebClientCount TV browser(s) connected")
                                                         } else {
-                                                            "Works on Samsung, LG, Sony, Fire TV, Mi TV & PC"
+                                                            AppUiTranslator.t("Works on Samsung, LG, Sony, Fire TV, Mi TV & PC")
                                                         },
                                                         color = if (isWebServerRunning) accentGreen else textSec,
                                                         fontSize = 11.sp
@@ -2755,7 +2757,7 @@ object HybridCastManager {
                                                 ) {
                                                     Column(modifier = Modifier.weight(1f)) {
                                                         Text(
-                                                            text = "OPEN THIS URL ON YOUR SMART TV BROWSER:",
+                                                            text = AppUiTranslator.t("OPEN THIS URL ON YOUR SMART TV BROWSER:"),
                                                             color = textSec,
                                                             fontSize = 9.5.sp,
                                                             fontWeight = FontWeight.Bold
@@ -2782,7 +2784,7 @@ object HybridCastManager {
                                                     ) {
                                                         Icon(
                                                             imageVector = Icons.Rounded.ContentCopy,
-                                                            contentDescription = "Copy Web TV URL",
+                                                            contentDescription = AppUiTranslator.t("Copy Web TV URL"),
                                                             tint = textPri,
                                                             modifier = Modifier.size(19.dp)
                                                         )
@@ -2793,7 +2795,7 @@ object HybridCastManager {
                                                     ) {
                                                         Icon(
                                                             imageVector = Icons.Rounded.QrCode2,
-                                                            contentDescription = "Show QR Badge",
+                                                            contentDescription = AppUiTranslator.t("Show QR Badge"),
                                                             tint = primaryRed,
                                                             modifier = Modifier.size(21.dp)
                                                         )
@@ -2809,7 +2811,7 @@ object HybridCastManager {
                                             }
 
                                             Text(
-                                                text = "• Type $webServerUrl once in your TV's web browser.\n• Whenever you switch channels in Hypnotix on your phone, the TV automatically switches channels live!",
+                                                text = AppUiTranslator.t("• Type $webServerUrl once in your TV's web browser.\n• Whenever you switch channels in Hypnotix on your phone, the TV automatically switches channels live!"),
                                                 color = textSec,
                                                 fontSize = 11.sp,
                                                 lineHeight = 15.sp
@@ -2845,7 +2847,7 @@ object HybridCastManager {
                                         ) {
                                             Icon(
                                                 imageVector = Icons.Rounded.ScreenShare,
-                                                contentDescription = "System Wireless Display",
+                                                contentDescription = AppUiTranslator.t("System Wireless Display"),
                                                 tint = primaryRed,
                                                 modifier = Modifier.size(21.dp)
                                             )
@@ -2853,13 +2855,13 @@ object HybridCastManager {
                                         Spacer(modifier = Modifier.width(11.dp))
                                         Column(modifier = Modifier.weight(1f)) {
                                             Text(
-                                                text = "System Cast / Screen Mirroring",
+                                                text = AppUiTranslator.t("System Cast / Screen Mirroring"),
                                                 color = textPri,
                                                 fontSize = 13.5.sp,
                                                 fontWeight = FontWeight.Bold
                                             )
                                             Text(
-                                                text = "Chromecast, Miracast, Samsung Smart View, Mi Cast",
+                                                text = AppUiTranslator.t("Chromecast, Miracast, Samsung Smart View, Mi Cast"),
                                                 color = textSec,
                                                 fontSize = 11.sp
                                             )
@@ -2897,7 +2899,7 @@ object HybridCastManager {
                                         ) {
                                             Icon(
                                                 imageVector = Icons.Rounded.Devices,
-                                                contentDescription = "External Cast Player",
+                                                contentDescription = AppUiTranslator.t("External Cast Player"),
                                                 tint = primaryRed,
                                                 modifier = Modifier.size(21.dp)
                                             )
@@ -2905,13 +2907,13 @@ object HybridCastManager {
                                         Spacer(modifier = Modifier.width(11.dp))
                                         Column(modifier = Modifier.weight(1f)) {
                                             Text(
-                                                text = "Beam Stream to External Cast App",
+                                                text = AppUiTranslator.t("Beam Stream to External Cast App"),
                                                 color = textPri,
                                                 fontSize = 13.5.sp,
                                                 fontWeight = FontWeight.Bold
                                             )
                                             Text(
-                                                text = "Send live M3U8 to Web Video Caster, VLC, BubbleUPnP or LocalCast",
+                                                text = AppUiTranslator.t("Send live M3U8 to Web Video Caster, VLC, BubbleUPnP or LocalCast"),
                                                 color = textSec,
                                                 fontSize = 11.sp
                                             )
@@ -2959,7 +2961,7 @@ object HybridCastManager {
                                             )
                                             Spacer(modifier = Modifier.width(6.dp))
                                             Text(
-                                                text = "Copy Stream URL",
+                                                text = AppUiTranslator.t("Copy Stream URL"),
                                                 color = textPri,
                                                 fontSize = 12.sp,
                                                 fontWeight = FontWeight.SemiBold
@@ -2989,7 +2991,7 @@ object HybridCastManager {
                                             )
                                             Spacer(modifier = Modifier.width(6.dp))
                                             Text(
-                                                text = "Share TV Link",
+                                                text = AppUiTranslator.t("Share TV Link"),
                                                 color = textPri,
                                                 fontSize = 12.sp,
                                                 fontWeight = FontWeight.SemiBold
@@ -3095,6 +3097,7 @@ object HybridCastManager {
 
     @Composable
     private fun WebUrlVisualCard(url: String, channelName: String) {
+        AppUiTranslator.rememberLanguageCode()
         Surface(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(12.dp),
@@ -3146,7 +3149,7 @@ object HybridCastManager {
                     verticalArrangement = Arrangement.spacedBy(3.dp)
                 ) {
                     Text(
-                        text = "TV Browser Quick Connect",
+                        text = AppUiTranslator.t("TV Browser Quick Connect"),
                         color = Color.White,
                         fontSize = 12.5.sp,
                         fontWeight = FontWeight.Bold
@@ -3159,7 +3162,7 @@ object HybridCastManager {
                         fontFamily = FontFamily.Monospace
                     )
                     Text(
-                        text = "Now streaming: ${channelName.ifBlank { "Live TV" }}",
+                        text = AppUiTranslator.t("Now streaming: ${channelName.ifBlank { "Live TV" }}"),
                         color = Color(0xFFA1A1AA),
                         fontSize = 10.5.sp,
                         maxLines = 1,

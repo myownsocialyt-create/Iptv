@@ -139,6 +139,7 @@ fun SubscriptionContent(
     onClose: () -> Unit
 ) {
     val context = LocalContext.current
+    AppUiTranslator.rememberLanguageCode()
     val activity = context as? Activity
 
     val isPremium by PremiumManager.isPremiumState
@@ -147,8 +148,8 @@ fun SubscriptionContent(
     var selectedPlan by remember { mutableStateOf(PremiumManager.PLAN_LIFETIME) }
     var isPurchasing by remember { mutableStateOf(false) }
 
-    val monthlyPrice = billingHelper.priceDisplayMap[PremiumManager.PLAN_MONTHLY] ?: "₹99.00/Month"
-    val yearlyPrice = billingHelper.priceDisplayMap[PremiumManager.PLAN_YEARLY] ?: "₹599.00/Year"
+    val monthlyPrice = AppUiTranslator.t(billingHelper.priceDisplayMap[PremiumManager.PLAN_MONTHLY] ?: "₹99.00/Month")
+    val yearlyPrice = AppUiTranslator.t(billingHelper.priceDisplayMap[PremiumManager.PLAN_YEARLY] ?: "₹599.00/Year")
     val lifetimePrice = billingHelper.priceDisplayMap[PremiumManager.PLAN_LIFETIME] ?: "₹1,499.00"
 
     val scrollState = rememberScrollState()
@@ -185,14 +186,14 @@ fun SubscriptionContent(
                 if (heroBitmap != null) {
                     Image(
                         bitmap = heroBitmap,
-                        contentDescription = "Premium Banner",
+                        contentDescription = AppUiTranslator.t("Premium Banner"),
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop
                     )
                 } else {
                     Image(
                         painter = painterResource(id = R.drawable.img_banner_sports_live),
-                        contentDescription = "Premium Banner",
+                        contentDescription = AppUiTranslator.t("Premium Banner"),
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop
                     )
@@ -226,7 +227,7 @@ fun SubscriptionContent(
                 ) {
                     Icon(
                         imageVector = Icons.Default.Close,
-                        contentDescription = "Close",
+                        contentDescription = AppUiTranslator.t("Close"),
                         tint = Color.White,
                         modifier = Modifier.size(20.dp)
                     )
@@ -240,7 +241,7 @@ fun SubscriptionContent(
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Text(
-                        text = "Upgrade Premium",
+                        text = AppUiTranslator.t("Upgrade Premium"),
                         fontSize = 30.sp,
                         fontWeight = FontWeight.Bold,
                         textAlign = TextAlign.Center,
@@ -258,7 +259,7 @@ fun SubscriptionContent(
                     Spacer(modifier = Modifier.height(6.dp))
 
                     Text(
-                        text = "Activate more opportunities to explore all treasures",
+                        text = AppUiTranslator.t("Activate more opportunities to explore all treasures"),
                         color = Color(0xFFA0A5B5),
                         fontSize = 13.sp,
                         textAlign = TextAlign.Center
@@ -283,7 +284,7 @@ fun SubscriptionContent(
                 ) {
                     Spacer(modifier = Modifier.weight(1f))
                     Text(
-                        text = "Premium",
+                        text = AppUiTranslator.t("Premium"),
                         color = Color(0xFF38B6FF),
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Bold,
@@ -291,7 +292,7 @@ fun SubscriptionContent(
                         textAlign = TextAlign.Center
                     )
                     Text(
-                        text = "Basic",
+                        text = AppUiTranslator.t("Basic"),
                         color = Color(0xFF8E95A5),
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Medium,
@@ -301,22 +302,22 @@ fun SubscriptionContent(
                 }
 
                 FeatureComparisonRow(
-                    featureName = "Unlock All Access Features",
+                    featureName = AppUiTranslator.t("Unlock All Access Features"),
                     isPremiumChecked = true,
                     isBasicChecked = false
                 )
                 FeatureComparisonRow(
-                    featureName = "No Ads - Remove All Ads",
+                    featureName = AppUiTranslator.t("No Ads - Remove All Ads"),
                     isPremiumChecked = true,
                     isBasicChecked = false
                 )
                 FeatureComparisonRow(
-                    featureName = "Unlimited Playlist & Channel",
+                    featureName = AppUiTranslator.t("Unlimited Playlist & Channel"),
                     isPremiumChecked = true,
                     isBasicChecked = false
                 )
                 FeatureComparisonRow(
-                    featureName = "Picture-in-Picture & Xtream",
+                    featureName = AppUiTranslator.t("Picture-in-Picture & Xtream"),
                     isPremiumChecked = true,
                     isBasicChecked = false
                 )
@@ -333,31 +334,31 @@ fun SubscriptionContent(
             ) {
                 // 1. Lifetime Plan (Highlighted with "Most Popular" badge)
                 PlanCard(
-                    title = "Lifetime",
-                    subtitle = if (isPremium && activePlan == PremiumManager.PLAN_LIFETIME) "Active Plan" else "One-time payment",
+                    title = AppUiTranslator.t("Lifetime"),
+                    subtitle = AppUiTranslator.t(if (isPremium && activePlan == PremiumManager.PLAN_LIFETIME) "Active Plan" else "One-time payment"),
                     price = lifetimePrice,
                     isSelected = selectedPlan == PremiumManager.PLAN_LIFETIME,
-                    badgeText = if (isPremium && activePlan == PremiumManager.PLAN_LIFETIME) "Active" else "Most Popular",
+                    badgeText = AppUiTranslator.t(if (isPremium && activePlan == PremiumManager.PLAN_LIFETIME) "Active" else "Most Popular"),
                     onClick = { selectedPlan = PremiumManager.PLAN_LIFETIME }
                 )
 
                 // 2. Yearly Plan
                 PlanCard(
-                    title = "Yearly",
-                    subtitle = if (isPremium && activePlan == PremiumManager.PLAN_YEARLY) "Active Plan" else "Auto-renewable",
+                    title = AppUiTranslator.t("Yearly"),
+                    subtitle = AppUiTranslator.t(if (isPremium && activePlan == PremiumManager.PLAN_YEARLY) "Active Plan" else "Auto-renewable"),
                     price = yearlyPrice,
                     isSelected = selectedPlan == PremiumManager.PLAN_YEARLY,
-                    badgeText = if (isPremium && activePlan == PremiumManager.PLAN_YEARLY) "Active" else null,
+                    badgeText = if (isPremium && activePlan == PremiumManager.PLAN_YEARLY) AppUiTranslator.t("Active") else null,
                     onClick = { selectedPlan = PremiumManager.PLAN_YEARLY }
                 )
 
                 // 3. Monthly Plan
                 PlanCard(
-                    title = "Monthly",
-                    subtitle = if (isPremium && activePlan == PremiumManager.PLAN_MONTHLY) "Active Plan" else "Auto-renewable",
+                    title = AppUiTranslator.t("Monthly"),
+                    subtitle = AppUiTranslator.t(if (isPremium && activePlan == PremiumManager.PLAN_MONTHLY) "Active Plan" else "Auto-renewable"),
                     price = monthlyPrice,
                     isSelected = selectedPlan == PremiumManager.PLAN_MONTHLY,
-                    badgeText = if (isPremium && activePlan == PremiumManager.PLAN_MONTHLY) "Active" else null,
+                    badgeText = if (isPremium && activePlan == PremiumManager.PLAN_MONTHLY) AppUiTranslator.t("Active") else null,
                     onClick = { selectedPlan = PremiumManager.PLAN_MONTHLY }
                 )
             }
@@ -369,7 +370,11 @@ fun SubscriptionContent(
                 onClick = {
                     if (activity == null) {
                         isPurchasing = false
-                        Toast.makeText(context, "Unable to start purchase from this context.", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(
+                            context,
+                            AppUiTranslator.tx("Unable to start purchase from this context.", context),
+                            Toast.LENGTH_SHORT
+                        ).show()
                         return@Button
                     }
 
@@ -380,13 +385,17 @@ fun SubscriptionContent(
                         } else {
                             "You already have Lifetime Premium."
                         }
-                        Toast.makeText(activity, msg, Toast.LENGTH_SHORT).show()
+                        Toast.makeText(activity, AppUiTranslator.tx(msg, activity), Toast.LENGTH_SHORT).show()
                         return@Button
                     }
 
                     if (isPremium && activePlan == selectedPlan) {
                         isPurchasing = false
-                        Toast.makeText(activity, "You already have this plan active.", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(
+                            activity,
+                            AppUiTranslator.tx("You already have this plan active.", activity),
+                            Toast.LENGTH_SHORT
+                        ).show()
                         return@Button
                     }
 
@@ -394,10 +403,14 @@ fun SubscriptionContent(
                     billingHelper.launchPurchaseFlow(activity, selectedPlan) { success, errorMsg ->
                         isPurchasing = false
                         if (success) {
-                            Toast.makeText(activity, "🎉 Premium Activated!", Toast.LENGTH_LONG).show()
+                            Toast.makeText(
+                                activity,
+                                AppUiTranslator.tx("🎉 Premium Activated!", activity),
+                                Toast.LENGTH_LONG
+                            ).show()
                             onClose()
                         } else if (errorMsg != null && errorMsg != "User canceled") {
-                            Toast.makeText(activity, errorMsg, Toast.LENGTH_LONG).show()
+                            Toast.makeText(activity, AppUiTranslator.tx(errorMsg, activity), Toast.LENGTH_LONG).show()
                         }
                     }
                 },
@@ -412,7 +425,7 @@ fun SubscriptionContent(
                 enabled = !isPurchasing
             ) {
                 Text(
-                    text = if (isPurchasing) "Connecting..." else "Continue",
+                    text = AppUiTranslator.t(if (isPurchasing) "Connecting..." else "Continue"),
                     color = Color.White,
                     fontSize = 17.sp,
                     fontWeight = FontWeight.Bold
@@ -428,7 +441,7 @@ fun SubscriptionContent(
                         isPurchasing = true
                         billingHelper.restorePurchases(activity) { success, msg ->
                             isPurchasing = false
-                            Toast.makeText(activity, msg, Toast.LENGTH_SHORT).show()
+                            Toast.makeText(activity, AppUiTranslator.tx(msg, activity), Toast.LENGTH_SHORT).show()
                             if (success) {
                                 onClose()
                             }
@@ -438,7 +451,7 @@ fun SubscriptionContent(
                 enabled = !isPurchasing
             ) {
                 Text(
-                    text = "Restore Purchases",
+                    text = AppUiTranslator.t("Restore Purchases"),
                     color = Color(0xFF64B5F6),
                     fontSize = 13.sp,
                     fontWeight = FontWeight.SemiBold
@@ -453,7 +466,7 @@ fun SubscriptionContent(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "Privacy Policy",
+                    text = AppUiTranslator.t("Privacy Policy"),
                     color = Color(0xFF38B6FF),
                     fontSize = 12.sp,
                     modifier = Modifier.clickable {
@@ -464,7 +477,11 @@ fun SubscriptionContent(
                             )
                             context.startActivity(intent)
                         } catch (e: Exception) {
-                            Toast.makeText(context, "Privacy Policy: Contact support", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(
+                                context,
+                                AppUiTranslator.tx("Privacy Policy: Contact support", context),
+                                Toast.LENGTH_SHORT
+                            ).show()
                         }
                     }
                 )
@@ -474,7 +491,7 @@ fun SubscriptionContent(
                     fontSize = 12.sp
                 )
                 Text(
-                    text = "Terms of Service",
+                    text = AppUiTranslator.t("Terms of Service"),
                     color = Color(0xFF38B6FF),
                     fontSize = 12.sp,
                     modifier = Modifier.clickable {
@@ -485,7 +502,11 @@ fun SubscriptionContent(
                             )
                             context.startActivity(intent)
                         } catch (e: Exception) {
-                            Toast.makeText(context, "Terms: Contact support", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(
+                                context,
+                                AppUiTranslator.tx("Terms: Contact support", context),
+                                Toast.LENGTH_SHORT
+                            ).show()
                         }
                     }
                 )
@@ -501,25 +522,25 @@ fun SubscriptionContent(
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 Text(
-                    text = "• Payment will be charged to your Google account.",
+                    text = AppUiTranslator.t("• Payment will be charged to your Google account."),
                     color = Color(0xFF70778A),
                     fontSize = 11.sp,
                     lineHeight = 15.sp
                 )
                 Text(
-                    text = "• Subscription renews automatically unless auto-renew is turned off.",
+                    text = AppUiTranslator.t("• Subscription renews automatically unless auto-renew is turned off."),
                     color = Color(0xFF70778A),
                     fontSize = 11.sp,
                     lineHeight = 15.sp
                 )
                 Text(
-                    text = "• You can manage or cancel your subscription anytime in Google Play Store → Payments & subscriptions.",
+                    text = AppUiTranslator.t("• You can manage or cancel your subscription anytime in Google Play Store → Payments & subscriptions."),
                     color = Color(0xFF70778A),
                     fontSize = 11.sp,
                     lineHeight = 15.sp
                 )
                 Text(
-                    text = "• Lifetime plan is a one-time purchase with no auto-renewal. Purchases can be restored anytime on the same Google account.",
+                    text = AppUiTranslator.t("• Lifetime plan is a one-time purchase with no auto-renewal. Purchases can be restored anytime on the same Google account."),
                     color = Color(0xFF70778A),
                     fontSize = 11.sp,
                     lineHeight = 15.sp
@@ -568,7 +589,7 @@ private fun FeatureComparisonRow(
             if (isPremiumChecked) {
                 Icon(
                     imageVector = Icons.Default.Check,
-                    contentDescription = "Included in Premium",
+                    contentDescription = AppUiTranslator.t("Included in Premium"),
                     tint = Color(0xFF38B6FF),
                     modifier = Modifier.size(19.dp)
                 )
@@ -582,7 +603,7 @@ private fun FeatureComparisonRow(
             if (isBasicChecked) {
                 Icon(
                     imageVector = Icons.Default.Check,
-                    contentDescription = "Included in Basic",
+                    contentDescription = AppUiTranslator.t("Included in Basic"),
                     tint = Color(0xFF8E95A5),
                     modifier = Modifier.size(18.dp)
                 )

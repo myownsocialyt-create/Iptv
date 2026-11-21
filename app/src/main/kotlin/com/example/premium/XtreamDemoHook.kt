@@ -136,6 +136,11 @@ object XtreamDemoHook {
     @Suppress("UNCHECKED_CAST")
     fun captureAddProfileCallback(target: Any?) {
         if (target == null) return
+        val directCb = target as? Function0<Any?>
+        if (directCb != null) {
+            lastOnAddProfileClick = directCb
+            return
+        }
         val cb = getField(target, "\$onAddProfileClick") as? Function0<Any?>
         if (cb != null) {
             lastOnAddProfileClick = cb
@@ -169,7 +174,6 @@ object XtreamDemoHook {
 
         val liveAccounts = observeXtreamAccounts()
         val demoConnected = hasConnectedDemoAccount(liveAccounts)
-        val onAddAccount = lastOnAddProfileClick
 
         val showAddAccountMode = demoConnected
 
@@ -190,7 +194,7 @@ object XtreamDemoHook {
             ) {
                 Icon(
                     imageVector = if (showAddAccountMode) Icons.Rounded.PersonAdd else Icons.Rounded.Bolt,
-                    contentDescription = if (showAddAccountMode) "Add Account" else "Demo Account",
+                    contentDescription = AppUiTranslator.t(if (showAddAccountMode) "Add Account" else "Demo Account"),
                     tint = ottPrimary,
                     modifier = Modifier.size(22.dp)
                 )
@@ -201,7 +205,7 @@ object XtreamDemoHook {
                 verticalArrangement = Arrangement.spacedBy(2.dp)
             ) {
                 Text(
-                    text = if (showAddAccountMode) "Add Account" else "Need a test server?",
+                    text = AppUiTranslator.t(if (showAddAccountMode) "Add Account" else "Need a test server?"),
                     color = textPrimary,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Bold,
@@ -209,11 +213,13 @@ object XtreamDemoHook {
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    text = if (showAddAccountMode) {
-                        "Demo active • Add your server"
-                    } else {
-                        "One-tap connect to verified sample Xtream streams"
-                    },
+                    text = AppUiTranslator.t(
+                        if (showAddAccountMode) {
+                            "Demo active • Add your server"
+                        } else {
+                            "One-tap connect to verified sample Xtream streams"
+                        }
+                    ),
                     color = textSecondary,
                     fontSize = 11.5.sp,
                     lineHeight = 15.sp,
@@ -225,7 +231,7 @@ object XtreamDemoHook {
             Button(
                 onClick = {
                     if (showAddAccountMode) {
-                        runCatching { onAddAccount?.invoke() }
+                        runCatching { lastOnAddProfileClick?.invoke() }
                     } else {
                         runCatching { onConnectDemo?.invoke() }
                     }
@@ -250,7 +256,7 @@ object XtreamDemoHook {
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = "Add",
+                        text = AppUiTranslator.t("Add"),
                         color = Color.White,
                         fontSize = 12.5.sp,
                         fontWeight = FontWeight.Bold,
@@ -259,7 +265,7 @@ object XtreamDemoHook {
                     )
                 } else {
                     Text(
-                        text = "Connect",
+                        text = AppUiTranslator.t("Connect"),
                         color = Color.White,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,

@@ -103,7 +103,7 @@ object XtreamHeaderHook {
             ) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = "Back",
+                    contentDescription = AppUiTranslator.t("Back"),
                     tint = textPrimary,
                     modifier = Modifier.size(22.dp)
                 )
@@ -202,7 +202,7 @@ object XtreamHeaderHook {
                     .testTag("xtream_add_profile_button")
             ) {
                 Text(
-                    text = "+ Add",
+                    text = AppUiTranslator.t("+ Add"),
                     color = Color.White,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,

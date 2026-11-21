@@ -318,9 +318,14 @@ object SplitPortraitHooks {
                 .ifEmpty { "TV" }
         }
 
-        val subtitleText = remember(category, language) {
+        val langCode = AppUiTranslator.rememberLanguageCode()
+        val subtitleText = remember(category, language, isVodChannel, langCode) {
             buildString {
-                val cat = category.ifEmpty { "Live TV" }
+                val cat = if (category.isEmpty()) {
+                    AppUiTranslator.tx(if (isVodChannel) "Movie" else "Live TV", context)
+                } else {
+                    category
+                }
                 append(cat)
                 if (language.isNotEmpty() && !cat.equals(language, ignoreCase = true)) {
                     append(" • ")
@@ -384,7 +389,7 @@ object SplitPortraitHooks {
                     verticalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
                     Text(
-                        text = channelName.ifEmpty { "Live Channel" },
+                        text = channelName.ifEmpty { AppUiTranslator.t(if (isVodChannel) "Movie" else "Live Channel") },
                         color = palette.textPrimary,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.SemiBold,
@@ -399,12 +404,12 @@ object SplitPortraitHooks {
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(3.dp))
-                                .background(Color(0xFFE5253B))
+                                .background(if (isVodChannel) Color(0xFF7C3AED) else Color(0xFFE5253B))
                                 .padding(horizontal = 4.dp, vertical = 0.5.dp),
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                text = "LIVE",
+                                text = AppUiTranslator.t(if (isVodChannel) "MOVIE" else "LIVE"),
                                 color = Color.White,
                                 fontSize = 7.5.sp,
                                 lineHeight = 9.sp,
@@ -539,7 +544,11 @@ object SplitPortraitHooks {
                     palette = palette,
                     onClick = {
                         dualHighlighted = !dualHighlighted
-                        Toast.makeText(context, "Dual screen coming soon", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(
+                            context,
+                            AppUiTranslator.tx("Dual screen coming soon", context),
+                            Toast.LENGTH_SHORT
+                        ).show()
                     }
                 )
 
@@ -610,13 +619,13 @@ object SplitPortraitHooks {
             ) {
                 Icon(
                     imageVector = icon,
-                    contentDescription = contentDescription,
+                    contentDescription = AppUiTranslator.t(contentDescription),
                     tint = fg,
                     modifier = Modifier.size(19.dp)
                 )
                 Spacer(modifier = Modifier.height(3.dp))
                 Text(
-                    text = label,
+                    text = AppUiTranslator.t(label),
                     color = if (isActive) fg else palette.textSecondary,
                     fontSize = 10.sp,
                     fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Medium,
@@ -703,27 +712,47 @@ object SplitPortraitHooks {
         val currentPlaylistUrl = (invokeNoArg(currentPlaylist, "getUrl") as? String) ?: ""
         val currentPlaylistTitleRaw = (invokeNoArg(currentPlaylist, "getTitle") as? String) ?: ""
         val activeChannelId = (invokeNoArg(activeChannel, "getId") as? String)?.trim()?.lowercase(java.util.Locale.ROOT).orEmpty()
-        val effectiveIsXtreamMode = isXtreamMode ||
-            !xtreamAccountName.isNullOrBlank() ||
-            currentPlaylistUrl.startsWith("xtream_account://") ||
-            currentPlaylistId.startsWith("xtream_") ||
-            activeChannelId.startsWith("xtream_") ||
-            activeChannelId.startsWith("vod_") ||
-            activeChannelId.startsWith("demo_live_") ||
-            activeChannelId.startsWith("demo_vod_")
+
+        val isXtreamUrl = currentPlaylistUrl.startsWith("xtream_account://")
+        val isXtreamId = currentPlaylistId.startsWith("xtream_")
+        val isXtreamTitle = currentPlaylistTitleRaw.startsWith("Xtream:", ignoreCase = true)
+        val isRegularPlaylistSource = !isXtreamUrl && !isXtreamId && !isXtreamTitle && (
+            currentPlaylistId.startsWith("preset_") ||
+                currentPlaylistId == "none" ||
+                currentPlaylistUrl.isNotEmpty()
+            )
+        val hasRealXtreamName = !xtreamAccountName.isNullOrBlank() &&
+            !xtreamAccountName.equals("Xtream IPTV", ignoreCase = true)
+
+        val effectiveIsXtreamMode = when {
+            isXtreamUrl || isXtreamId || isXtreamTitle || isXtreamMode -> true
+            isRegularPlaylistSource -> false
+            hasRealXtreamName -> true
+            else -> activeChannelId.startsWith("xtream_") ||
+                activeChannelId.startsWith("vod_") ||
+                activeChannelId.startsWith("demo_live_") ||
+                activeChannelId.startsWith("demo_vod_")
+        }
+
+        val m3uCustomPlaylists = customPlaylists.filter { entity ->
+            val url = (invokeNoArg(entity, "getUrl") as? String)?.trim() ?: ""
+            !url.startsWith("xtream_account://") &&
+                !url.contains("player_api.php", ignoreCase = true)
+        }
 
         val indiaAvailable = !deletedPresetIds.contains("preset_india")
         val globalAvailable = !deletedPresetIds.contains("preset_global")
-        val noPlaylistsAvailable = !effectiveIsXtreamMode && !indiaAvailable && !globalAvailable && customPlaylists.isEmpty()
+        val noPlaylistsAvailable = !effectiveIsXtreamMode && !indiaAvailable && !globalAvailable && m3uCustomPlaylists.isEmpty()
 
-        val shortSwitchLabel = remember(
+        val isAddPlaylistState = noPlaylistsAvailable || currentPlaylistId == "none"
+        val rawSwitchLabel = remember(
             currentPlaylistId,
             currentPlaylistTitleRaw,
             effectiveIsXtreamMode,
             xtreamAccountName,
             noPlaylistsAvailable
         ) {
-            if (noPlaylistsAvailable || currentPlaylistId == "none") {
+            if (isAddPlaylistState) {
                 "Add Playlist"
             } else {
                 formatShortPlaylistLabel(
@@ -733,6 +762,10 @@ object SplitPortraitHooks {
                     xtreamAccountName = xtreamAccountName
                 )
             }
+        }
+        val shortSwitchLabel = when (rawSwitchLabel) {
+            "Add Playlist", "India", "Indian", "Global", "All", "Xtream" -> AppUiTranslator.t(rawSwitchLabel)
+            else -> rawSwitchLabel
         }
 
         fun openAddPlaylistDialog() {
@@ -752,7 +785,7 @@ object SplitPortraitHooks {
         ) {
             val isVeryNarrow = maxWidth < 310.dp
             val switchMaxWidth = when {
-                shortSwitchLabel == "Add Playlist" -> if (isVeryNarrow) 108.dp else 124.dp
+                isAddPlaylistState -> if (isVeryNarrow) 108.dp else 124.dp
                 isVeryNarrow -> 86.dp
                 else -> 104.dp
             }
@@ -781,7 +814,7 @@ object SplitPortraitHooks {
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.Search,
-                            contentDescription = "Filter channels",
+                            contentDescription = AppUiTranslator.t("Filter channels"),
                             tint = palette.textMuted,
                             modifier = Modifier.size(17.dp)
                         )
@@ -792,7 +825,7 @@ object SplitPortraitHooks {
                         ) {
                             if (queryText.isEmpty()) {
                                 Text(
-                                    text = "Filter channels",
+                                    text = AppUiTranslator.t("Filter channels"),
                                     color = palette.textMuted,
                                     fontSize = 13.sp,
                                     maxLines = 1,
@@ -830,7 +863,7 @@ object SplitPortraitHooks {
                             ) {
                                 Icon(
                                     imageVector = Icons.Rounded.Close,
-                                    contentDescription = "Clear search",
+                                    contentDescription = AppUiTranslator.t("Clear search"),
                                     tint = palette.textSecondary,
                                     modifier = Modifier.size(15.dp)
                                 )
@@ -876,7 +909,7 @@ object SplitPortraitHooks {
                             Spacer(modifier = Modifier.width(3.dp))
                             Icon(
                                 imageVector = Icons.Rounded.KeyboardArrowDown,
-                                contentDescription = "Switch playlist",
+                                contentDescription = AppUiTranslator.t("Switch playlist"),
                                 tint = palette.textSecondary,
                                 modifier = Modifier.size(16.dp)
                             )
@@ -896,7 +929,7 @@ object SplitPortraitHooks {
                             if (!noPlaylistsAvailable && allSource != null) {
                                 val isSelected = currentPlaylistId == "preset_all"
                                 PlaylistDropdownOption(
-                                    label = "🌐  All Playlists",
+                                    label = "🌐  ${AppUiTranslator.t("All Playlists")}",
                                     isSelected = isSelected,
                                     palette = palette,
                                     onClick = {
@@ -909,7 +942,7 @@ object SplitPortraitHooks {
                             if (indiaSource != null && indiaAvailable) {
                                 val isSelected = currentPlaylistId == "preset_india"
                                 PlaylistDropdownOption(
-                                    label = "🇮🇳  India Channels",
+                                    label = "🇮🇳  ${AppUiTranslator.t("India Channels")}",
                                     isSelected = isSelected,
                                     palette = palette,
                                     onClick = {
@@ -922,7 +955,7 @@ object SplitPortraitHooks {
                             if (globalSource != null && globalAvailable) {
                                 val isSelected = currentPlaylistId == "preset_global"
                                 PlaylistDropdownOption(
-                                    label = "🌍  Global Channels",
+                                    label = "🌍  ${AppUiTranslator.t("Global Channels")}",
                                     isSelected = isSelected,
                                     palette = palette,
                                     onClick = {
@@ -932,14 +965,10 @@ object SplitPortraitHooks {
                                 )
                             }
 
-                            val m3uEntities = customPlaylists.filter { entity ->
-                                val url = (invokeNoArg(entity, "getUrl") as? String)?.trim() ?: ""
-                                !url.startsWith("xtream_account://")
-                            }
-
-                            for (entity in m3uEntities) {
+                            for (entity in m3uCustomPlaylists) {
                                 val id = (invokeNoArg(entity, "getId") as? Number)?.toLong() ?: continue
-                                val title = (invokeNoArg(entity, "getTitle") as? String)?.takeIf { it.isNotBlank() } ?: "Playlist"
+                                val title = (invokeNoArg(entity, "getTitle") as? String)?.takeIf { it.isNotBlank() }
+                                    ?: AppUiTranslator.t("Playlist")
                                 val url = (invokeNoArg(entity, "getUrl") as? String)?.trim() ?: ""
                                 val sourceId = "custom_$id"
                                 val isSelected = (currentPlaylistId == sourceId) ||
@@ -961,7 +990,7 @@ object SplitPortraitHooks {
 
                             if (noPlaylistsAvailable) {
                                 PlaylistDropdownOption(
-                                    label = "➕  Add Playlist",
+                                    label = "➕  ${AppUiTranslator.t("Add Playlist")}",
                                     isSelected = false,
                                     palette = palette,
                                     onClick = {
@@ -980,7 +1009,8 @@ object SplitPortraitHooks {
                                 if (!url.startsWith("xtream_account://")) continue
                                 if (!seenUrls.add(url)) continue
                                 val id = (invokeNoArg(entity, "getId") as? Number)?.toLong() ?: 0L
-                                val title = (invokeNoArg(entity, "getTitle") as? String)?.takeIf { it.isNotBlank() } ?: "Xtream Account"
+                                val title = (invokeNoArg(entity, "getTitle") as? String)?.takeIf { it.isNotBlank() }
+                                    ?: AppUiTranslator.t("Xtream Account")
                                 xtreamItems.add(Triple("custom_$id", title, url))
                             }
 
@@ -991,7 +1021,7 @@ object SplitPortraitHooks {
                                 if (!seenUrls.add(url)) continue
                                 val name = (invokeNoArg(acc, "getName") as? String)?.takeIf { it.isNotBlank() }
                                     ?: (invokeNoArg(acc, "getUsername") as? String)?.takeIf { it.isNotBlank() }
-                                    ?: "Xtream Account"
+                                    ?: AppUiTranslator.t("Xtream Account")
                                 xtreamItems.add(Triple("xtream_$accId", name, url))
                             }
 
@@ -1050,7 +1080,7 @@ object SplitPortraitHooks {
                     Box(contentAlignment = Alignment.Center) {
                         Icon(
                             imageVector = Icons.Rounded.Refresh,
-                            contentDescription = "Reload playlist and stream",
+                            contentDescription = AppUiTranslator.t("Reload playlist and stream"),
                             tint = if (isReloading) palette.primary else palette.textPrimary,
                             modifier = Modifier
                                 .size(19.dp)
@@ -1084,7 +1114,7 @@ object SplitPortraitHooks {
                 {
                     Icon(
                         imageVector = Icons.Filled.Check,
-                        contentDescription = "Selected",
+                        contentDescription = AppUiTranslator.t("Selected"),
                         tint = palette.primary,
                         modifier = Modifier.size(16.dp)
                     )
@@ -1119,7 +1149,7 @@ object SplitPortraitHooks {
             } else {
                 "Refreshing playlist..."
             }
-            Toast.makeText(context, toastMsg, Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, AppUiTranslator.tx(toastMsg, context), Toast.LENGTH_SHORT).show()
         } catch (t: Throwable) {
             Log.e(TAG, "performWorkingReload failed", t)
         }
@@ -1220,7 +1250,9 @@ object SplitPortraitHooks {
         if (playlistId == "none" || title.equals("Add Playlist", ignoreCase = true)) {
             return "Add Playlist"
         }
-        val raw = if (isXtreamMode && !xtreamAccountName.isNullOrBlank()) {
+        val raw = if (isXtreamMode && !xtreamAccountName.isNullOrBlank() &&
+            !xtreamAccountName.equals("Xtream IPTV", ignoreCase = true)
+        ) {
             xtreamAccountName.trim()
         } else {
             title.trim()

@@ -2166,7 +2166,7 @@ object PremiumUiHooks {
 
                 // Title
                 val titleView = TextView(activity).apply {
-                    text = title
+                    text = AppUiTranslator.tx(title, activity)
                     setTextColor(titleTextColor)
                     setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
                     typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
@@ -2184,7 +2184,7 @@ object PremiumUiHooks {
 
                 // Description Message
                 val messageView = TextView(activity).apply {
-                    text = message
+                    text = AppUiTranslator.tx(message, activity)
                     setTextColor(messageTextColor)
                     setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
                     gravity = Gravity.CENTER
@@ -2202,7 +2202,7 @@ object PremiumUiHooks {
 
                 // Primary Button: Buy Subscription (Hypnotix Red Gradient + White Bold Text)
                 val buyButton = TextView(activity).apply {
-                    text = "Buy Subscription"
+                    text = AppUiTranslator.tx("Buy Subscription", activity)
                     setTextColor(AndroidColor.WHITE)
                     setTextSize(TypedValue.COMPLEX_UNIT_SP, 15.5f)
                     typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
@@ -2239,7 +2239,7 @@ object PremiumUiHooks {
 
                 // Secondary Button: Not Now (Black/White surface pill matching theme)
                 val cancelButton = TextView(activity).apply {
-                    text = "Not Now"
+                    text = AppUiTranslator.tx("Not Now", activity)
                     setTextColor(cancelBtnTextColor)
                     setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
                     typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
@@ -2476,7 +2476,7 @@ object PremiumUiHooks {
                 )
 
                 val tagPill = TextView(activity).apply {
-                    text = "UPDATE REQUIRED"
+                    text = AppUiTranslator.tx("UPDATE REQUIRED", activity)
                     setTextColor(redAccentColor)
                     setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f)
                     typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
@@ -2502,7 +2502,7 @@ object PremiumUiHooks {
                 )
 
                 val titleView = TextView(activity).apply {
-                    text = "App Version Outdated"
+                    text = AppUiTranslator.tx("App Version Outdated", activity)
                     setTextColor(titleTextColor)
                     setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
                     typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
@@ -2519,7 +2519,7 @@ object PremiumUiHooks {
                 )
 
                 val messageView = TextView(activity).apply {
-                    text = "This version of the app is outdated. Please update the app from Google Play Store to continue watching seamlessly."
+                    text = AppUiTranslator.tx("This version of the app is outdated. Please update the app from Google Play Store to continue watching seamlessly.", activity)
                     setTextColor(messageTextColor)
                     setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
                     gravity = Gravity.CENTER
@@ -2536,7 +2536,7 @@ object PremiumUiHooks {
                 )
 
                 val updateButton = TextView(activity).apply {
-                    text = "Update Now"
+                    text = AppUiTranslator.tx("Update Now", activity)
                     setTextColor(AndroidColor.WHITE)
                     setTextSize(TypedValue.COMPLEX_UNIT_SP, 15.5f)
                     typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
@@ -3872,6 +3872,7 @@ object PremiumUiHooks {
     fun RenderGoldPremiumBadge() {
         val context = LocalContext.current
         updateContextAndActivity(context)
+        AppUiTranslator.rememberLanguageCode()
         val isPremium by PremiumManager.isPremiumState
         val activePlan by PremiumManager.activePlanState
 
@@ -3901,7 +3902,7 @@ object PremiumUiHooks {
                     } else if (activePlan != PremiumManager.PLAN_LIFETIME) {
                         SubscriptionActivity.start(context)
                     } else {
-                        Toast.makeText(context, "👑 Lifetime Premium Active!", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, AppUiTranslator.tx("👑 Lifetime Premium Active!", context), Toast.LENGTH_SHORT).show()
                     }
                 },
             shape = RoundedCornerShape(16.dp),
@@ -3921,7 +3922,7 @@ object PremiumUiHooks {
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = if (isPremium) "Premium" else "Go Premium",
+                    text = AppUiTranslator.t(if (isPremium) "Premium" else "Go Premium"),
                     fontSize = 12.5.sp,
                     fontWeight = FontWeight.ExtraBold,
                     style = androidx.compose.ui.text.TextStyle(
@@ -3936,7 +3937,7 @@ object PremiumUiHooks {
                             .padding(horizontal = 5.dp, vertical = 1.dp)
                     ) {
                         Text(
-                            text = "UPGRADE",
+                            text = AppUiTranslator.t("UPGRADE"),
                             color = Color(0xFFFFD700),
                             fontSize = 8.5.sp,
                             fontWeight = FontWeight.Bold
@@ -4063,6 +4064,7 @@ object PremiumUiHooks {
     private fun RenderAppearanceThemeSelector(target: Any) {
         val context = LocalContext.current
         updateContextAndActivity(context)
+        AppUiTranslator.rememberLanguageCode()
         val viewModel = remember { discoverViewModelIfNeeded() }
         val systemInDark = isSystemInDarkTheme()
 
@@ -4120,11 +4122,13 @@ object PremiumUiHooks {
             "dark" -> Icons.Filled.DarkMode
             else -> Icons.Filled.BrightnessAuto
         }
-        val activeBadgeLabel = when (selectedKey) {
-            "light" -> "Light"
-            "dark" -> "Dark"
-            else -> "Auto"
-        }
+        val activeBadgeLabel = AppUiTranslator.t(
+            when (selectedKey) {
+                "light" -> "Light"
+                "dark" -> "Dark"
+                else -> "Auto"
+            }
+        )
 
         Column(
             modifier = Modifier
@@ -4144,7 +4148,7 @@ object PremiumUiHooks {
                 ) {
                     Icon(
                         imageVector = headerIcon,
-                        contentDescription = "Theme Mode",
+                        contentDescription = AppUiTranslator.t("Theme Mode"),
                         tint = accentRed,
                         modifier = Modifier.size(20.dp)
                     )
@@ -4153,7 +4157,7 @@ object PremiumUiHooks {
                 Spacer(modifier = Modifier.width(12.dp))
 
                 Text(
-                    text = "Theme Mode",
+                    text = AppUiTranslator.t("Theme Mode"),
                     fontSize = 15.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = textPrimary,
@@ -4183,7 +4187,7 @@ object PremiumUiHooks {
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 ThemeModeOptionTile(
-                    label = "System Default",
+                    label = AppUiTranslator.t("System Default"),
                     icon = Icons.Filled.BrightnessAuto,
                     isSelected = selectedKey == "system",
                     accentRed = accentRed,
@@ -4201,7 +4205,7 @@ object PremiumUiHooks {
                 )
 
                 ThemeModeOptionTile(
-                    label = "Light",
+                    label = AppUiTranslator.t("Light"),
                     icon = Icons.Filled.LightMode,
                     isSelected = selectedKey == "light",
                     accentRed = accentRed,
@@ -4219,7 +4223,7 @@ object PremiumUiHooks {
                 )
 
                 ThemeModeOptionTile(
-                    label = "Dark",
+                    label = AppUiTranslator.t("Dark"),
                     icon = Icons.Filled.DarkMode,
                     isSelected = selectedKey == "dark",
                     accentRed = accentRed,
@@ -4239,11 +4243,13 @@ object PremiumUiHooks {
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            val statusDescription = when (selectedKey) {
-                "light" -> "Clean White theme active: crisp bright styling."
-                "dark" -> "OLED True Black theme active: rich dark styling."
-                else -> "Following device theme (Currently ${if (systemInDark) "Dark" else "Light"})."
-            }
+            val statusDescription = AppUiTranslator.t(
+                when (selectedKey) {
+                    "light" -> "Clean White theme active: crisp bright styling."
+                    "dark" -> "OLED True Black theme active: rich dark styling."
+                    else -> "Following device theme (Currently ${if (systemInDark) "Dark" else "Light"})."
+                }
+            )
             Text(
                 text = statusDescription,
                 fontSize = 12.sp,
@@ -4344,6 +4350,7 @@ object PremiumUiHooks {
         showMenuState: MutableState<Boolean>?
     ) {
         val context = LocalContext.current
+        AppUiTranslator.rememberLanguageCode()
         val viewModel = rawViewModel ?: discoverViewModelIfNeeded()
         val isDark = isAppInDarkMode(context, viewModel)
 
@@ -4417,7 +4424,7 @@ object PremiumUiHooks {
                     {
                         Icon(
                             imageVector = Icons.Filled.Check,
-                            contentDescription = "Selected",
+                            contentDescription = AppUiTranslator.t("Selected"),
                             tint = accentRed,
                             modifier = Modifier.size(16.dp)
                         )
@@ -4440,7 +4447,7 @@ object PremiumUiHooks {
 
         if (globalAvailable && globalSource != null) {
             PlaylistMenuRow(
-                title = "Global Channels",
+                title = AppUiTranslator.t("Global Channels"),
                 icon = Icons.Filled.Public,
                 iconTint = if (isDark) Color(0xFF38BDF8) else Color(0xFF0284C7),
                 isSelected = selectedPlaylistId == globalId,
@@ -4451,7 +4458,7 @@ object PremiumUiHooks {
 
         if (indiaAvailable && indiaSource != null) {
             PlaylistMenuRow(
-                title = "India Channels",
+                title = AppUiTranslator.t("India Channels"),
                 icon = Icons.Filled.LiveTv,
                 iconTint = if (isDark) Color(0xFF34D399) else Color(0xFF059669),
                 isSelected = selectedPlaylistId == indiaId,
@@ -4462,7 +4469,7 @@ object PremiumUiHooks {
 
         if (anyAvailable && allSource != null) {
             PlaylistMenuRow(
-                title = "All Channels",
+                title = AppUiTranslator.t("All Channels"),
                 icon = Icons.Filled.PlaylistPlay,
                 iconTint = if (isDark) Color(0xFF818CF8) else Color(0xFF4F46E5),
                 isSelected = selectedPlaylistId == allId,
@@ -4471,9 +4478,11 @@ object PremiumUiHooks {
             )
         }
 
+        val myPlaylistFallback = AppUiTranslator.t("My Playlist")
         for (entity in customList) {
             val id = (safeCall(entity, "getId") as? Number)?.toLong() ?: continue
-            val title = (safeCall(entity, "getTitle") as? String)?.trim()?.ifEmpty { "My Playlist" } ?: "My Playlist"
+            val rawTitle = (safeCall(entity, "getTitle") as? String)?.trim().orEmpty()
+            val title = rawTitle.ifEmpty { myPlaylistFallback }
             val url = (safeCall(entity, "getUrl") as? String)?.trim() ?: ""
             val customId = "custom_$id"
             val (itemIcon, itemTint) = resolveAddedPlaylistIcon(url, isDark)
@@ -4492,7 +4501,7 @@ object PremiumUiHooks {
 
         if (!anyAvailable) {
             PlaylistMenuRow(
-                title = "Add Playlist",
+                title = AppUiTranslator.t("Add Playlist"),
                 icon = Icons.Filled.PlaylistAdd,
                 iconTint = accentRed,
                 isSelected = false,
@@ -4561,6 +4570,7 @@ object PremiumUiHooks {
     fun RenderDrawerPremiumBanner() {
         val context = LocalContext.current
         updateContextAndActivity(context)
+        AppUiTranslator.rememberLanguageCode()
         val isPremium by PremiumManager.isPremiumState
         val activePlan by PremiumManager.activePlanState
         val isDark = isAppInDarkMode(context, discoverViewModelIfNeeded())
@@ -4632,7 +4642,7 @@ object PremiumUiHooks {
                     if (!isPremium || activePlan != PremiumManager.PLAN_LIFETIME) {
                         SubscriptionActivity.start(context)
                     } else {
-                        Toast.makeText(context, "👑 Lifetime Premium Active!", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, AppUiTranslator.tx("👑 Lifetime Premium Active!", context), Toast.LENGTH_SHORT).show()
                     }
                 }
                 .padding(horizontal = 10.dp, vertical = 7.dp)
@@ -4659,7 +4669,7 @@ object PremiumUiHooks {
 
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = if (isPremium) "Premium Member" else "Go Pro / Premium",
+                        text = AppUiTranslator.t(if (isPremium) "Premium Member" else "Go Pro / Premium"),
                         color = titleColor,
                         fontSize = 13.sp,
                         lineHeight = 15.sp,
@@ -4668,12 +4678,14 @@ object PremiumUiHooks {
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
-                        text = if (isPremium && activePlan != PremiumManager.PLAN_LIFETIME)
-                            "Tap to upgrade your plan"
-                        else if (isPremium)
-                            "All VIP features unlocked"
-                        else
-                            "No Ads • PiP • Xtream",
+                        text = AppUiTranslator.t(
+                            if (isPremium && activePlan != PremiumManager.PLAN_LIFETIME)
+                                "Tap to upgrade your plan"
+                            else if (isPremium)
+                                "All VIP features unlocked"
+                            else
+                                "No Ads • PiP • Xtream"
+                        ),
                         color = subtitleColor,
                         fontSize = 10.sp,
                         lineHeight = 12.sp,
@@ -4691,7 +4703,7 @@ object PremiumUiHooks {
                         .padding(horizontal = 9.dp, vertical = 4.dp)
                 ) {
                     Text(
-                        text = if (isPremium) "PRO" else "BUY",
+                        text = AppUiTranslator.t(if (isPremium) "PRO" else "BUY"),
                         color = ctaTextColor,
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Black,

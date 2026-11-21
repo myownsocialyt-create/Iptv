@@ -199,7 +199,7 @@ object HomeChannelCardHook {
                 shape = RoundedCornerShape(4.dp)
             ) {
                 Text(
-                    text = tag,
+                    text = AppUiTranslator.t(tag),
                     color = Color.White,
                     fontSize = 9.sp,
                     lineHeight = 11.sp,
@@ -306,8 +306,8 @@ object HomeChannelCardHook {
         onPlay: () -> Unit,
         onToggleFavorite: () -> Unit
     ) {
-        val badgeText = resolveBadgeLabel(isVod)
-        val displayCategory = category.ifBlank { if (isVod) "VOD" else "Live" }
+        val badgeText = AppUiTranslator.t(resolveBadgeLabel(isVod))
+        val displayCategory = AppUiTranslator.t(category.ifBlank { if (isVod) "VOD" else "Live" })
         val tightTextStyle = remember {
             TextStyle(
                 platformStyle = PlatformTextStyle(includeFontPadding = false)
@@ -359,7 +359,7 @@ object HomeChannelCardHook {
                 ) {
                     Icon(
                         imageVector = if (isFavorite) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
-                        contentDescription = if (isFavorite) "Remove from favorites" else "Add to favorites",
+                        contentDescription = AppUiTranslator.t(if (isFavorite) "Remove from favorites" else "Add to favorites"),
                         tint = if (isFavorite) OTT_GOLD else palette.textMuted,
                         modifier = Modifier.size(16.dp)
                     )
@@ -475,7 +475,7 @@ object HomeChannelCardHook {
                     Box(contentAlignment = Alignment.Center) {
                         Icon(
                             imageVector = Icons.Filled.PlayArrow,
-                            contentDescription = "Play $channelName",
+                            contentDescription = "${AppUiTranslator.t("Play")} $channelName",
                             tint = OTT_PRIMARY,
                             modifier = Modifier.size(14.dp)
                         )

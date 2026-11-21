@@ -74,6 +74,7 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.premium.AppUiTranslator
 
 class HelpSupportActivity : ComponentActivity() {
 
@@ -128,7 +129,11 @@ class HelpSupportActivity : ComponentActivity() {
                 }
                 context.startActivity(intent)
             } catch (_: Throwable) {
-                Toast.makeText(context, "Unable to open Help & Support", Toast.LENGTH_SHORT).show()
+                Toast.makeText(
+                    context,
+                    AppUiTranslator.tx("Unable to open Help & Support", context),
+                    Toast.LENGTH_SHORT
+                ).show()
             }
         }
 
@@ -193,7 +198,7 @@ class HelpSupportActivity : ComponentActivity() {
             } catch (_: Throwable) {
                 Toast.makeText(
                     context,
-                    "No email app found on this device.",
+                    AppUiTranslator.tx("No email app found on this device.", context),
                     Toast.LENGTH_LONG
                 ).show()
                 false
@@ -209,6 +214,7 @@ private fun HelpSupportScreen(
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
+    AppUiTranslator.rememberLanguageCode()
     val topics = remember {
         listOf(
             "Playback Issue",
@@ -241,7 +247,7 @@ private fun HelpSupportScreen(
             CenterAlignedTopAppBar(
                 title = {
                     Text(
-                        text = "Help & Support",
+                        text = AppUiTranslator.t("Help & Support"),
                         color = textPrimary,
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Bold,
@@ -256,7 +262,7 @@ private fun HelpSupportScreen(
                     ) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back",
+                            contentDescription = AppUiTranslator.t("Back"),
                             tint = textPrimary
                         )
                     }
@@ -305,7 +311,7 @@ private fun HelpSupportScreen(
                         ) {
                             Icon(
                                 imageVector = Icons.Rounded.SupportAgent,
-                                contentDescription = "Support",
+                                contentDescription = AppUiTranslator.t("Support"),
                                 tint = primary,
                                 modifier = Modifier.size(24.dp)
                             )
@@ -313,14 +319,14 @@ private fun HelpSupportScreen(
                         Spacer(modifier = Modifier.width(12.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Need Help?",
+                                text = AppUiTranslator.t("Need Help?"),
                                 color = textPrimary,
                                 fontSize = 15.sp,
                                 fontWeight = FontWeight.Bold
                             )
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = "Select a category or write your topic & message below, then tap Send.",
+                                text = AppUiTranslator.t("Select a category or write your topic & message below, then tap Send."),
                                 color = textSecondary,
                                 fontSize = 12.sp,
                                 lineHeight = 16.sp
@@ -332,7 +338,7 @@ private fun HelpSupportScreen(
                 // Quick topic selector chips (none pre-selected; user chooses)
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        text = "Select Category",
+                        text = AppUiTranslator.t("Select Category"),
                         color = textPrimary,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold
@@ -360,7 +366,7 @@ private fun HelpSupportScreen(
                                 )
                             ) {
                                 Text(
-                                    text = category,
+                                    text = AppUiTranslator.t(category),
                                     color = if (isSelected) Color.White else textSecondary,
                                     fontSize = 12.sp,
                                     fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
@@ -374,7 +380,7 @@ private fun HelpSupportScreen(
                 // Topic / Subject input
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(
-                        text = "Topic / Subject",
+                        text = AppUiTranslator.t("Topic / Subject"),
                         color = textPrimary,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold
@@ -385,7 +391,7 @@ private fun HelpSupportScreen(
                         singleLine = true,
                         placeholder = {
                             Text(
-                                text = "e.g. Channel not playing or Xtream login issue",
+                                text = AppUiTranslator.t("e.g. Channel not playing or Xtream login issue"),
                                 color = textMuted,
                                 fontSize = 13.sp
                             )
@@ -413,7 +419,7 @@ private fun HelpSupportScreen(
                 // Message input
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(
-                        text = "Your Message",
+                        text = AppUiTranslator.t("Your Message"),
                         color = textPrimary,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold
@@ -431,7 +437,7 @@ private fun HelpSupportScreen(
                         isError = messageError != null,
                         placeholder = {
                             Text(
-                                text = "Describe your issue, question, or feedback here...",
+                                text = AppUiTranslator.t("Describe your issue, question, or feedback here..."),
                                 color = textMuted,
                                 fontSize = 13.sp
                             )
@@ -470,7 +476,7 @@ private fun HelpSupportScreen(
                     onClick = {
                         val trimmedMsg = messageText.trim()
                         if (trimmedMsg.isEmpty()) {
-                            messageError = "Please enter your message before sending."
+                            messageError = AppUiTranslator.tx("Please enter your message before sending.", context)
                             return@Button
                         }
                         val finalSubject = HelpSupportActivity.buildEmailSubject(
@@ -500,7 +506,7 @@ private fun HelpSupportScreen(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "Send",
+                        text = AppUiTranslator.t("Send"),
                         fontSize = 15.sp,
                         fontWeight = FontWeight.Bold
                     )

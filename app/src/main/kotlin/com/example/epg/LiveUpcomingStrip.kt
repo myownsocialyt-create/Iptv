@@ -54,6 +54,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import com.example.premium.AppUiTranslator
 import kotlinx.coroutines.delay
 
 @Composable
@@ -117,9 +118,9 @@ fun LiveUpcomingHeaderBadge(
         ?.takeIf { it.isNotEmpty() }
 
     val detailText = when (epgState) {
-        is EpgUiState.Loading -> "Loading..."
-        is EpgUiState.Available -> nextShowTitle ?: "Not available"
-        is EpgUiState.Unavailable -> "Not available"
+        is EpgUiState.Loading -> AppUiTranslator.t("Loading...")
+        is EpgUiState.Available -> nextShowTitle ?: AppUiTranslator.t("Not available")
+        is EpgUiState.Unavailable -> AppUiTranslator.t("Not available")
     }
 
     Column(
@@ -146,7 +147,7 @@ fun LiveUpcomingHeaderBadge(
             contentAlignment = Alignment.Center
         ) {
             Text(
-                text = "UPCOMING",
+                text = AppUiTranslator.t("UPCOMING"),
                 color = if (nextShowTitle != null) textPrimary else textSecondary,
                 fontSize = 7.5.sp,
                 lineHeight = 9.sp,
@@ -252,7 +253,7 @@ private fun FullUpcomingScheduleDialog(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "Upcoming Schedule",
+                            text = AppUiTranslator.t("Upcoming Schedule"),
                             color = textPrimary,
                             fontSize = 15.sp,
                             fontWeight = FontWeight.Bold,
@@ -276,7 +277,7 @@ private fun FullUpcomingScheduleDialog(
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.Refresh,
-                            contentDescription = "Refresh schedule",
+                            contentDescription = AppUiTranslator.t("Refresh schedule"),
                             tint = textSecondary,
                             modifier = Modifier.size(18.dp)
                         )
@@ -291,7 +292,7 @@ private fun FullUpcomingScheduleDialog(
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.Close,
-                            contentDescription = "Close",
+                            contentDescription = AppUiTranslator.t("Close"),
                             tint = textSecondary,
                             modifier = Modifier.size(18.dp)
                         )
@@ -328,7 +329,7 @@ private fun FullUpcomingScheduleDialog(
                                         horizontalArrangement = Arrangement.SpaceBetween
                                     ) {
                                         Text(
-                                            text = "• LIVE NOW",
+                                            text = AppUiTranslator.t("• LIVE NOW"),
                                             color = primaryColor,
                                             fontSize = 10.sp,
                                             fontWeight = FontWeight.ExtraBold
@@ -378,7 +379,7 @@ private fun FullUpcomingScheduleDialog(
                     if (state.upcoming.isEmpty()) {
                         item(key = "no_more_upcoming") {
                             Text(
-                                text = "No upcoming details available",
+                                text = AppUiTranslator.t("No upcoming details available"),
                                 color = textMuted,
                                 fontSize = 12.sp,
                                 modifier = Modifier.padding(vertical = 8.dp)
@@ -387,7 +388,7 @@ private fun FullUpcomingScheduleDialog(
                     } else {
                         item(key = "upcoming_header") {
                             Text(
-                                text = "UPCOMING",
+                                text = AppUiTranslator.t("UPCOMING"),
                                 color = textMuted,
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,
@@ -419,7 +420,7 @@ private fun FullUpcomingScheduleDialog(
                                             fontWeight = FontWeight.SemiBold
                                         )
                                         Text(
-                                            text = LiveEpgManager.formatTimeUntil(prog.startTimeMs, nowMs),
+                                            text = AppUiTranslator.t(LiveEpgManager.formatTimeUntil(prog.startTimeMs, nowMs)),
                                             color = textMuted,
                                             fontSize = 10.sp,
                                             fontWeight = FontWeight.Medium
@@ -461,13 +462,13 @@ private fun FullUpcomingScheduleDialog(
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.Link,
-                            contentDescription = "Configure EPG URL",
+                            contentDescription = AppUiTranslator.t("Configure EPG URL"),
                             tint = primaryColor,
                             modifier = Modifier.size(14.dp)
                         )
                         Spacer(modifier = Modifier.width(5.dp))
                         Text(
-                            text = "Set Custom XMLTV EPG URL",
+                            text = AppUiTranslator.t("Set Custom XMLTV EPG URL"),
                             color = primaryColor,
                             fontSize = 11.5.sp,
                             fontWeight = FontWeight.SemiBold
@@ -510,13 +511,13 @@ private fun CustomEpgUrlDialog(
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Text(
-                    text = "Playlist EPG URL (XMLTV)",
+                    text = AppUiTranslator.t("Playlist EPG URL (XMLTV)"),
                     color = textPrimary,
                     fontSize = 15.sp,
                     fontWeight = FontWeight.Bold
                 )
                 Text(
-                    text = "Optional: Paste an XMLTV (.xml or .xml.gz) guide URL for M3U playlists that don't include built-in EPG data.",
+                    text = AppUiTranslator.t("Optional: Paste an XMLTV (.xml or .xml.gz) guide URL for M3U playlists that don't include built-in EPG data."),
                     color = textSecondary,
                     fontSize = 11.5.sp
                 )
@@ -549,13 +550,13 @@ private fun CustomEpgUrlDialog(
                     OutlinedButton(
                         onClick = {
                             LiveEpgManager.saveCustomEpgUrl(context, "")
-                            Toast.makeText(context, "EPG URL cleared", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, AppUiTranslator.tx("EPG URL cleared", context), Toast.LENGTH_SHORT).show()
                             onSaved()
                         },
                         border = BorderStroke(0.9.dp, borderColor),
                         modifier = Modifier.weight(1f)
                     ) {
-                        Text("Clear", color = textSecondary, fontSize = 12.sp)
+                        Text(AppUiTranslator.t("Clear"), color = textSecondary, fontSize = 12.sp)
                     }
                     Button(
                         onClick = {
@@ -564,13 +565,17 @@ private fun CustomEpgUrlDialog(
                                 !trimmed.startsWith("http://", ignoreCase = true) &&
                                 !trimmed.startsWith("https://", ignoreCase = true)
                             ) {
-                                Toast.makeText(context, "Enter a valid http/https EPG URL", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(
+                                    context,
+                                    AppUiTranslator.tx("Enter a valid http/https EPG URL", context),
+                                    Toast.LENGTH_SHORT
+                                ).show()
                                 return@Button
                             }
                             LiveEpgManager.saveCustomEpgUrl(context, trimmed)
                             Toast.makeText(
                                 context,
-                                if (trimmed.isEmpty()) "EPG URL cleared" else "EPG URL saved",
+                                AppUiTranslator.tx(if (trimmed.isEmpty()) "EPG URL cleared" else "EPG URL saved", context),
                                 Toast.LENGTH_SHORT
                             ).show()
                             onSaved()
@@ -583,7 +588,7 @@ private fun CustomEpgUrlDialog(
                             .weight(1f)
                             .testTag("custom_epg_url_save_button")
                     ) {
-                        Text("Save", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        Text(AppUiTranslator.t("Save"), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                     }
                 }
             }

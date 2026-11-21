@@ -40,6 +40,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.premium.AppUiTranslator
 import java.lang.reflect.Field
 import java.lang.reflect.Method
 import java.util.concurrent.ConcurrentHashMap
@@ -65,16 +66,21 @@ object StreamOfflineOverlayHook {
         val currentIndex = (getField(target, "\$currentIndex") as? Int) ?: -1
         val playerManager = getField(target, "\$playerManager")
 
-        val titleText = (invokeNoArg(strings, "getStreamOffline") as? String)
+        val rawTitle = (invokeNoArg(strings, "getStreamOffline") as? String)
             ?.takeIf { it.isNotBlank() } ?: "Stream Offline"
-        val retryText = (invokeNoArg(strings, "getRetry") as? String)
+        val rawRetry = (invokeNoArg(strings, "getRetry") as? String)
             ?.takeIf { it.isNotBlank() } ?: "Retry"
-        val nextText = (invokeNoArg(strings, "getNextChannel") as? String)
+        val rawNext = (invokeNoArg(strings, "getNextChannel") as? String)
             ?.takeIf { it.isNotBlank() } ?: "Next"
 
         val stateObj = playbackStateDelegate?.value
-        val errorMessage = (invokeNoArg(stateObj, "getMessage") as? String)
+        val rawErrorMessage = (invokeNoArg(stateObj, "getMessage") as? String)
             ?.takeIf { it.isNotBlank() } ?: "Unable to load stream. Try another server or channel."
+
+        val titleText = AppUiTranslator.t(rawTitle)
+        val retryText = AppUiTranslator.t(rawRetry)
+        val nextText = AppUiTranslator.t(rawNext)
+        val errorMessage = AppUiTranslator.t(rawErrorMessage)
 
         val ottRed = Color(0xFFE50914)
         val canSelectNext = hasNext && allChannels != null && currentIndex + 1 in allChannels.indices
